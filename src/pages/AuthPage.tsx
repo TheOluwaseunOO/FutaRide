@@ -1,18 +1,37 @@
 import { useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { type View } from '../App'
+import { useAuth } from '../context/AuthContext'
 
 interface Props {
-  setView: (v: View) => void
-  onAuth: (role: 'student' | 'driver') => void
-  intent: 'student' | 'driver'
+  setView?: (v: View) => void
+  onAuth?: (role: 'student' | 'driver') => void
+  intent?: 'student' | 'driver'
+  defaultMode?: 'login' | 'signup'
 }
 
-export default function AuthPage({ setView, onAuth, intent }: Props) {
-  const [mode, setMode] = useState<'login' | 'signup'>('login')
-  const [role, setRole] = useState<'student' | 'driver'>(intent)
+export default function AuthPage({ setView, onAuth, intent = 'student', defaultMode = 'login' }: Props) {
+  const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
+  const { signIn, signUp } = useAuth()
+
+  const urlRole = searchParams.get('role') as 'student' | 'driver' | null
+  const urlMode = searchParams.get('mode') as 'login' | 'signup' | null
+
+  const initialRole = urlRole === 'driver' || urlRole === 'student' ? urlRole : intent
+  const initialMode = urlMode === 'signup' || urlMode === 'login' ? urlMode : defaultMode
+
+  const [mode, setMode] = useState<'login' | 'signup'>(initialMode)
+  const [role, setRole] = useState<'student' | 'driver'>(initialRole)
   const [loading, setLoading] = useState(false)
 
-  const [form, setForm] = useState({ name: '', email: '', matric: '', password: '' })
+  const [form, setForm] = useState({
+    name: '',
+    email: '',
+    phone: '',
+    plateNumber: '',
+    password: '',
+  })
   const [error, setError] = useState('')
 
   function set(k: string, v: string) {
@@ -20,17 +39,51 @@ export default function AuthPage({ setView, onAuth, intent }: Props) {
     setError('')
   }
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!form.email || !form.password) { setError('Please fill in all required fields.'); return }
-    if (mode === 'signup' && role === 'student' && !form.matric) {
-      setError('Matric number is required for students.'); return
+    if (!form.email || !form.password) {
+      setError('Please fill in all required fields.')
+      return
     }
+    if (mode === 'signup') {
+      if (!form.name.trim()) {
+        setError('Full name is required.')
+        return
+      }
+    }
+
     setLoading(true)
-    setTimeout(() => {
+    setError('')
+
+    try {
+      if (mode === 'signup') {
+        const data = await signUp({
+          email: form.email.trim(),
+          password: form.password,
+          fullName: form.name.trim(),
+          phoneNumber: form.phone.trim(),
+          role,
+          vehiclePlateNumber: role === 'driver' ? (form.plateNumber.trim() || null) : null,
+        })
+        const resolvedRole = (data?.user?.user_metadata?.role || role).toLowerCase()
+        if (onAuth) onAuth(resolvedRole as 'student' | 'driver')
+        if (setView) setView(resolvedRole as any)
+        navigate(resolvedRole === 'driver' ? '/driver' : '/student')
+      } else {
+        const data = await signIn({
+          email: form.email.trim(),
+          password: form.password,
+        })
+        const resolvedRole = (data?.user?.user_metadata?.role || role).toLowerCase()
+        if (onAuth) onAuth(resolvedRole as 'student' | 'driver')
+        if (setView) setView(resolvedRole as any)
+        navigate(resolvedRole === 'driver' ? '/driver' : '/student')
+      }
+    } catch (err: any) {
+      setError(err?.message || 'Authentication failed. Please verify your credentials.')
+    } finally {
       setLoading(false)
-      onAuth(role)
-    }, 900)
+    }
   }
 
   return (
@@ -38,7 +91,7 @@ export default function AuthPage({ setView, onAuth, intent }: Props) {
 
       {/* Nav */}
       <div className="flex items-center justify-between px-6 md:px-12 h-16 bg-white" style={{ borderBottom: '1px solid #e8e8e8' }}>
-        <button onClick={() => setView('landing')}>
+        <button onClick={() => { if (setView) setView('landing'); navigate('/'); }}>
           <img src="/src/assets/logo.png" alt="FutaRide" className="h-8 w-auto" />
         </button>
         <button onClick={() => setMode(m => m === 'login' ? 'signup' : 'login')}
@@ -57,7 +110,7 @@ export default function AuthPage({ setView, onAuth, intent }: Props) {
             <p className="text-sm" style={{ color: '#737373' }}>
               {mode === 'login'
                 ? 'Log in to access your FutaRide portal.'
-                : 'Join FutaRide — free for FUTA students.'}
+                : 'Join FutaRide — quick rides across campus.'}
             </p>
           </div>
 
@@ -92,29 +145,45 @@ export default function AuthPage({ setView, onAuth, intent }: Props) {
 
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wide mb-1.5" style={{ color: '#737373' }}>
-                {role === 'student' ? 'FUTA Email' : 'Email Address'}
+                Email Address
               </label>
               <input
                 type="email"
                 value={form.email}
                 onChange={e => set('email', e.target.value)}
-                placeholder={role === 'student' ? 'you@futa.edu.ng' : 'driver@example.com'}
+                placeholder="name@example.com"
                 autoFocus
                 className="w-full px-4 py-3 rounded-xl text-sm focus:outline-none"
                 style={{ background: '#f7f7f7', border: '1px solid #e8e8e8', color: '#1a1a1a' }}
               />
             </div>
 
-            {mode === 'signup' && role === 'student' && (
+            {mode === 'signup' && (
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wide mb-1.5" style={{ color: '#737373' }}>
-                  Matric Number
+                  Phone Number
+                </label>
+                <input
+                  type="tel"
+                  value={form.phone}
+                  onChange={e => set('phone', e.target.value)}
+                  placeholder="e.g. 08012345678"
+                  className="w-full px-4 py-3 rounded-xl text-sm focus:outline-none"
+                  style={{ background: '#f7f7f7', border: '1px solid #e8e8e8', color: '#1a1a1a' }}
+                />
+              </div>
+            )}
+
+            {mode === 'signup' && role === 'driver' && (
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wide mb-1.5" style={{ color: '#737373' }}>
+                  Plate Number
                 </label>
                 <input
                   type="text"
-                  value={form.matric}
-                  onChange={e => set('matric', e.target.value)}
-                  placeholder="e.g. FUTMinna/21/1234"
+                  value={form.plateNumber}
+                  onChange={e => set('plateNumber', e.target.value)}
+                  placeholder="e.g. AKR-123-XA"
                   className="w-full px-4 py-3 rounded-xl text-sm focus:outline-none font-mono"
                   style={{ background: '#f7f7f7', border: '1px solid #e8e8e8', color: '#1a1a1a' }}
                 />
