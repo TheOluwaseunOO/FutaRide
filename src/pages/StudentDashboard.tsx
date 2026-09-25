@@ -1,5 +1,7 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { type View } from '../App'
+import { useAuth } from '../context/AuthContext'
 
 const HUBS = [
   'FUTA North Gate', 'FUTA South Gate', 'Obanla Campus Center',
@@ -50,9 +52,16 @@ const STATUS_STYLE: Record<string, { bg: string; color: string }> = {
 
 type Phase = 'idle' | 'searching' | 'accepted' | 'arriving' | 'completed'
 
-interface Props { setView: (v: View) => void }
+interface Props { setView?: (v: View) => void }
 
 export default function StudentDashboard({ setView }: Props) {
+  const navigate = useNavigate()
+  const { user, profile, signOut } = useAuth()
+
+  const displayName = profile?.full_name || user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'Student'
+  const firstName = displayName.split(' ')[0]
+  const matricOrSub = profile?.matric_number || (user?.id ? `ID: ${user.id.slice(0, 8)}...` : 'FUTA Student')
+
   const [pickup, setPickup]       = useState('')
   const [dropoff, setDropoff]     = useState('')
   const [customDest, setCustomDest] = useState('')
@@ -81,13 +90,13 @@ export default function StudentDashboard({ setView }: Props) {
       {/* ── Header ─────────────────────────── */}
       <header className="sticky top-0 z-40 flex items-center justify-between px-5 md:px-8 h-16 bg-white"
         style={{ borderBottom: '1px solid #e8e8e8' }}>
-        <button onClick={() => setView('landing')}>
+        <button onClick={() => { if (setView) setView('landing'); navigate('/'); }}>
           <img src="/src/assets/logo.png" alt="FutaRide" className="h-7 w-auto" />
         </button>
         <div className="flex items-center gap-3">
           <div className="hidden sm:block text-right">
-            <p className="text-sm font-semibold leading-none" style={{ color: '#1a1a1a' }}>Fatimah Adeleke</p>
-            <p className="text-xs mt-0.5" style={{ color: '#737373' }}>300L · SEET</p>
+            <p className="text-sm font-semibold leading-none" style={{ color: '#1a1a1a' }}>{displayName}</p>
+            <p className="text-xs mt-0.5" style={{ color: '#737373' }}>{matricOrSub}</p>
           </div>
           <img
             src="https://images.unsplash.com/photo-1694175271713-a6e2cc378980?w=80&h=80&fit=crop&auto=format"
@@ -95,6 +104,18 @@ export default function StudentDashboard({ setView }: Props) {
             className="w-9 h-9 rounded-full object-cover"
             style={{ border: '2px solid #E6900E' }}
           />
+          <button
+            onClick={async () => {
+              await signOut()
+              if (setView) setView('landing')
+              navigate('/')
+            }}
+            title="Sign Out"
+            className="text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:bg-neutral-100"
+            style={{ color: '#737373', border: '1px solid #e8e8e8' }}
+          >
+            Sign Out
+          </button>
         </div>
       </header>
 
@@ -103,7 +124,7 @@ export default function StudentDashboard({ setView }: Props) {
         <div className="max-w-lg mx-auto flex items-center gap-4">
           <div className="flex-1">
             <p className="text-xs font-mono uppercase tracking-widest mb-0.5" style={{ color: '#E6900E' }}>
-              {greeting} 👋
+              {greeting}, {firstName} 👋
             </p>
             <h2 className="text-2xl font-black" style={{ fontFamily: 'Outfit, sans-serif', color: '#1a1a1a' }}>
               Where are you going?
@@ -334,7 +355,7 @@ export default function StudentDashboard({ setView }: Props) {
 
                   <div className="flex items-center justify-between mb-5 px-4 py-3 rounded-xl"
                     style={{ background: fare != null ? '#fff7ed' : '#f7f7f7', border: `1px solid ${fare != null ? '#fed7aa' : '#e8e8e8'}` }}>
-                    <p className="text-sm" style={{ color: '#737373' }}>{fare != null ? 'Locked fare · pay cash' : 'Agree price with driver'}</p>
+                    <p className="text-sm" style={{ color: '#737373' }}>{fare != null ? 'Locked fare · Make Payment' : 'Agree price with driver'}</p>
                     {fare != null
                       ? <p className="text-xl font-black" style={{ fontFamily: 'Outfit, sans-serif', color: '#E6900E' }}>₦{fare}</p>
                       : <p className="text-sm font-bold" style={{ color: '#1a1a1a' }}>TBD</p>
@@ -373,7 +394,7 @@ export default function StudentDashboard({ setView }: Props) {
                   ? <p className="text-4xl font-black mb-1" style={{ fontFamily: 'Outfit, sans-serif', color: '#E6900E' }}>₦{fare}</p>
                   : <p className="text-lg font-bold mb-1" style={{ color: '#1a1a1a' }}>Fare agreed with driver</p>
                 }
-                <p className="text-xs" style={{ color: '#a3a3a3' }}>Pay cash on arrival · AKR-442-KE</p>
+                <p className="text-xs" style={{ color: '#a3a3a3' }}>Make Payment on arrival · AKR-442-KE</p>
               </div>
             )}
 
