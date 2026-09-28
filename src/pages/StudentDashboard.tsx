@@ -208,8 +208,7 @@ export default function StudentDashboard({ setView }: Props) {
       setActiveRideId(rideData.id)
       setPhase('searching')
 
-      setTimeout(() => setPhase('accepted'), 4000)
-      setTimeout(() => setPhase('arriving'), 9000)
+      
     } catch (err: any) {
       console.error('Ride request error:', err)
       setRequestError(err?.message || 'Failed to request ride. Please try again.')
@@ -228,6 +227,41 @@ export default function StudentDashboard({ setView }: Props) {
     setPhase('idle')
     setActiveRideId(null)
   }
+
+     // Realtime subscription for the active ride
+  useEffect(() => {
+    if (!activeRideId) return
+
+    const channel = supabase
+      .channel(`ride-status-${activeRideId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'rides',
+          filter: `id=eq.${activeRideId}`,
+        },
+        (payload) => {
+          const updatedRide = payload.new as { status: string }
+          if (updatedRide.status === 'accepted') {
+            setPhase('accepted')
+          } else if (updatedRide.status === 'arriving' || updatedRide.status === 'in_progress') {
+            setPhase('arriving')
+          } else if (updatedRide.status === 'completed') {
+            setPhase('completed')
+          } else if (updatedRide.status === 'cancelled') {
+            setPhase('idle')
+            setActiveRideId(null)
+          }
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [activeRideId])
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: '#f7f7f7' }}>
