@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { type View } from '../App'
 import { useAuth } from '../context/AuthContext'
+import { supabase } from '../lib/supabase'
 
 interface Props {
   setView?: (v: View) => void
@@ -45,11 +46,9 @@ export default function AuthPage({ setView, onAuth, intent = 'student', defaultM
       setError('Please fill in all required fields.')
       return
     }
-    if (mode === 'signup') {
-      if (!form.name.trim()) {
-        setError('Full name is required.')
-        return
-      }
+    if (mode === 'signup' && !form.name.trim()) {
+      setError('Full name is required.')
+      return
     }
 
     setLoading(true)
@@ -70,12 +69,34 @@ export default function AuthPage({ setView, onAuth, intent = 'student', defaultM
         if (setView) setView(resolvedRole as any)
         navigate(resolvedRole === 'driver' ? '/driver' : '/student')
       } else {
+        // Unified login: authenticate with credentials first
         const data = await signIn({
           email: form.email.trim(),
           password: form.password,
         })
-        const resolvedRole = (data?.user?.user_metadata?.role || role).toLowerCase()
-        if (onAuth) onAuth(resolvedRole as 'student' | 'driver')
+
+        const userId = data?.user?.id
+        let resolvedRole: 'student' | 'driver' = 'student'
+
+        if (userId) {
+          // Check if registered as a driver in driver_profiles
+          const { data: driverRow } = await supabase
+            .from('driver_profiles')
+            .select('id')
+            .eq('id', userId)
+            .maybeSingle()
+
+          if (driverRow) {
+            resolvedRole = 'driver'
+          } else {
+            const metaRole = data?.user?.user_metadata?.role
+            if (metaRole === 'driver') {
+              resolvedRole = 'driver'
+            }
+          }
+        }
+
+        if (onAuth) onAuth(resolvedRole)
         if (setView) setView(resolvedRole as any)
         navigate(resolvedRole === 'driver' ? '/driver' : '/student')
       }
@@ -94,7 +115,7 @@ export default function AuthPage({ setView, onAuth, intent = 'student', defaultM
         <button onClick={() => { if (setView) setView('landing'); navigate('/'); }}>
           <img src="/src/assets/logo.png" alt="FutaRide" className="h-8 w-auto" />
         </button>
-        <button onClick={() => setMode(m => m === 'login' ? 'signup' : 'login')}
+        <button onClick={() => { setMode(m => m === 'login' ? 'signup' : 'login'); setError('') }}
           className="text-sm" style={{ color: '#737373' }}>
           {mode === 'login' ? 'Need an account? Sign up' : 'Have an account? Log in'}
         </button>
@@ -114,16 +135,18 @@ export default function AuthPage({ setView, onAuth, intent = 'student', defaultM
             </p>
           </div>
 
-          {/* Role toggle */}
-          <div className="flex gap-1 p-1 rounded-xl mb-6 bg-white" style={{ border: '1px solid #e8e8e8' }}>
-            {(['student', 'driver'] as const).map(r => (
-              <button key={r} onClick={() => setRole(r)}
-                className="flex-1 py-2 rounded-lg text-sm font-semibold capitalize transition-all"
-                style={{ background: role === r ? '#1a1a1a' : 'transparent', color: role === r ? '#fff' : '#737373' }}>
-                {r}
-              </button>
-            ))}
-          </div>
+          {/* Role toggle: shown ONLY during signup */}
+          {mode === 'signup' && (
+            <div className="flex gap-1 p-1 rounded-xl mb-6 bg-white" style={{ border: '1px solid #e8e8e8' }}>
+              {(['student', 'driver'] as const).map(r => (
+                <button key={r} onClick={() => setRole(r)}
+                  className="flex-1 py-2 rounded-lg text-sm font-semibold capitalize transition-all"
+                  style={{ background: role === r ? '#1a1a1a' : 'transparent', color: role === r ? '#fff' : '#737373' }}>
+                  {r}
+                </button>
+              ))}
+            </div>
+          )}
 
           <form onSubmit={handleSubmit} className="bg-white rounded-2xl p-7 space-y-4" style={{ border: '1px solid #e8e8e8' }}>
 
