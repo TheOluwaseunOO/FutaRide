@@ -429,6 +429,15 @@ export default function StudentDashboard({ setView }: Props) {
     setAssignedDriver(null)
     setDriverQuote(null)
     setQuoteStatus('none')
+
+    // Clear selection
+    setPickupHub(null)
+    setIsPickupOthers(false)
+    setCustomPickupText('')
+    setDropoffHub(null)
+    setIsDropoffOthers(false)
+    setCustomDropoffText('')
+    setDynamicFare(null)
   }
 
   return (
@@ -769,11 +778,21 @@ export default function StudentDashboard({ setView }: Props) {
                 <p className="text-3xl font-black text-amber-600 mb-6">₦{dynamicFare}</p>
                 <button
                   onClick={() => {
+                    // Reset lifecycle & trip IDs
                     setPhase('idle')
                     setActiveRideId(null)
                     setAssignedDriver(null)
                     setDriverQuote(null)
                     setQuoteStatus('none')
+
+                    // Reset location selections cleanly to blank
+                    setPickupHub(null)
+                    setIsPickupOthers(false)
+                    setCustomPickupText('')
+                    setDropoffHub(null)
+                    setIsDropoffOthers(false)
+                    setCustomDropoffText('')
+                    setDynamicFare(null)
                   }}
                   className="px-6 py-3 rounded-xl bg-amber-500 text-white font-bold text-sm hover:bg-amber-600 transition-all"
                 >
