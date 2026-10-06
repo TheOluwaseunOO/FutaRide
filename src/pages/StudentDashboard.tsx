@@ -69,7 +69,7 @@ export default function StudentDashboard({ setView }: Props) {
   const { user, profile, signOut } = useAuth()
 
   const displayName = profile?.full_name || user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'Rider'
-  const [copiedId, setCopiedId] = useState(false)
+  const affiliation = profile?.department || 'Campus Rider'
 
   const [hubs, setHubs] = useState<LocationHub[]>(FALLBACK_HUBS)
   const [loadingHubs, setLoadingHubs] = useState(true)
@@ -114,13 +114,6 @@ export default function StudentDashboard({ setView }: Props) {
   const [showCounterBox, setShowCounterBox] = useState<boolean>(false)
 
   const isCustomTrip = isPickupOthers || isDropoffOthers
-
-  function handleCopyUserId() {
-    if (!user?.id) return
-    navigator.clipboard.writeText(user.id)
-    setCopiedId(true)
-    setTimeout(() => setCopiedId(false), 2000)
-  }
 
   async function fetchDriverInfo(driverId: string) {
     if (!driverId) return
@@ -582,21 +575,12 @@ export default function StudentDashboard({ setView }: Props) {
 
         <div className="flex items-center gap-2 sm:gap-3">
           <div className="text-right">
-            <p className="text-xs sm:text-sm font-bold leading-tight text-neutral-900 truncate max-w-[120px] sm:max-w-[180px]">
+            <p className="text-xs sm:text-sm font-bold leading-tight text-neutral-900 truncate max-w-[140px] sm:max-w-[200px]">
               {displayName}
             </p>
-            {user?.id && (
-              <button
-                onClick={handleCopyUserId}
-                title="Click to copy full User ID"
-                className="inline-flex items-center gap-1 text-[10px] sm:text-[11px] font-mono text-neutral-500 hover:text-neutral-900 transition-colors mt-0.5"
-              >
-                <span>ID: {user.id.slice(0, 8)}...</span>
-                <span className="text-[9px] bg-neutral-100 hover:bg-neutral-200 border border-neutral-200 px-1 py-0.5 rounded text-neutral-600">
-                  {copiedId ? 'Copied!' : 'Copy'}
-                </span>
-              </button>
-            )}
+            <p className="text-[11px] text-neutral-500 mt-0.5">
+              {affiliation}
+            </p>
           </div>
           <button
             onClick={async () => {
