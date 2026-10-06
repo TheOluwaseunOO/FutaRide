@@ -6,24 +6,26 @@ import { supabase } from '../lib/supabase'
 
 interface Props {
   setView?: (v: View) => void
-  onAuth?: (role: 'student' | 'driver') => void
-  intent?: 'student' | 'driver'
+  onAuth?: (role: 'rider' | 'driver') => void
+  intent?: 'rider' | 'driver' | 'student'
   defaultMode?: 'login' | 'signup'
 }
 
-export default function AuthPage({ setView, onAuth, intent = 'student', defaultMode = 'login' }: Props) {
+export default function AuthPage({ setView, onAuth, intent = 'rider', defaultMode = 'login' }: Props) {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const { signIn, signUp } = useAuth()
 
-  const urlRole = searchParams.get('role') as 'student' | 'driver' | null
+  const rawUrlRole = searchParams.get('role')?.toLowerCase()
+  const urlRole = rawUrlRole === 'student' ? 'rider' : (rawUrlRole as 'rider' | 'driver' | null)
   const urlMode = searchParams.get('mode') as 'login' | 'signup' | null
 
-  const initialRole = urlRole === 'driver' || urlRole === 'student' ? urlRole : intent
+  const normalizedIntent: 'rider' | 'driver' = intent === 'student' ? 'rider' : intent
+  const initialRole = urlRole === 'driver' || urlRole === 'rider' ? urlRole : normalizedIntent
   const initialMode = urlMode === 'signup' || urlMode === 'login' ? urlMode : defaultMode
 
   const [mode, setMode] = useState<'login' | 'signup'>(initialMode)
-  const [role, setRole] = useState<'student' | 'driver'>(initialRole)
+  const [role, setRole] = useState<'rider' | 'driver'>(initialRole)
   const [loading, setLoading] = useState(false)
 
   const [form, setForm] = useState({
@@ -64,10 +66,12 @@ export default function AuthPage({ setView, onAuth, intent = 'student', defaultM
           role,
           vehiclePlateNumber: role === 'driver' ? (form.plateNumber.trim() || null) : null,
         })
-        const resolvedRole = (data?.user?.user_metadata?.role || role).toLowerCase()
-        if (onAuth) onAuth(resolvedRole as 'student' | 'driver')
+        let resolvedRole = (data?.user?.user_metadata?.role || role).toLowerCase()
+        if (resolvedRole === 'student') resolvedRole = 'rider'
+
+        if (onAuth) onAuth(resolvedRole as 'rider' | 'driver')
         if (setView) setView(resolvedRole as any)
-        navigate(resolvedRole === 'driver' ? '/driver' : '/student')
+        navigate(resolvedRole === 'driver' ? '/driver' : '/rider')
       } else {
         // Unified login: authenticate with credentials first
         const data = await signIn({
@@ -76,7 +80,7 @@ export default function AuthPage({ setView, onAuth, intent = 'student', defaultM
         })
 
         const userId = data?.user?.id
-        let resolvedRole: 'student' | 'driver' = 'student'
+        let resolvedRole: 'rider' | 'driver' = 'rider'
 
         if (userId) {
           // Check if registered as a driver in driver_profiles
@@ -89,7 +93,7 @@ export default function AuthPage({ setView, onAuth, intent = 'student', defaultM
           if (driverRow) {
             resolvedRole = 'driver'
           } else {
-            const metaRole = data?.user?.user_metadata?.role
+            const metaRole = (data?.user?.user_metadata?.role || '').toLowerCase()
             if (metaRole === 'driver') {
               resolvedRole = 'driver'
             }
@@ -98,7 +102,7 @@ export default function AuthPage({ setView, onAuth, intent = 'student', defaultM
 
         if (onAuth) onAuth(resolvedRole)
         if (setView) setView(resolvedRole as any)
-        navigate(resolvedRole === 'driver' ? '/driver' : '/student')
+        navigate(resolvedRole === 'driver' ? '/driver' : '/rider')
       }
     } catch (err: any) {
       setError(err?.message || 'Authentication failed. Please verify your credentials.')
@@ -108,7 +112,7 @@ export default function AuthPage({ setView, onAuth, intent = 'student', defaultM
   }
 
   return (
-    <div className="min-h-screen flex flex-col" style={{ background: '#f7f7f7' }}>
+    <div className="min-h-screen flex flex-col font-sans" style={{ background: '#f7f7f7' }}>
 
       {/* Nav */}
       <div className="flex items-center justify-between px-6 md:px-12 h-16 bg-white" style={{ borderBottom: '1px solid #e8e8e8' }}>
@@ -117,7 +121,7 @@ export default function AuthPage({ setView, onAuth, intent = 'student', defaultM
         </button>
         <button onClick={() => { setMode(m => m === 'login' ? 'signup' : 'login'); setError('') }}
           className="text-sm" style={{ color: '#737373' }}>
-          {mode === 'login' ? 'Need an account? Sign up' : 'Have an account? Log in'}
+          {mode === 'login' ? 'New User? Sign up' : 'Have an account? Log in'}
         </button>
       </div>
 
@@ -138,7 +142,7 @@ export default function AuthPage({ setView, onAuth, intent = 'student', defaultM
           {/* Role toggle: shown ONLY during signup */}
           {mode === 'signup' && (
             <div className="flex gap-1 p-1 rounded-xl mb-6 bg-white" style={{ border: '1px solid #e8e8e8' }}>
-              {(['student', 'driver'] as const).map(r => (
+              {(['rider', 'driver'] as const).map(r => (
                 <button key={r} onClick={() => setRole(r)}
                   className="flex-1 py-2 rounded-lg text-sm font-semibold capitalize transition-all"
                   style={{ background: role === r ? '#1a1a1a' : 'transparent', color: role === r ? '#fff' : '#737373' }}>
@@ -159,7 +163,7 @@ export default function AuthPage({ setView, onAuth, intent = 'student', defaultM
                   type="text"
                   value={form.name}
                   onChange={e => set('name', e.target.value)}
-                  placeholder={role === 'student' ? 'e.g. Fatimah Abubakar' : 'e.g. Adewale Kayode'}
+                  placeholder={role === 'rider' ? 'e.g. Fatimah Abubakar' : 'e.g. Adewale Kayode'}
                   className="w-full px-4 py-3 rounded-xl text-sm focus:outline-none"
                   style={{ background: '#f7f7f7', border: '1px solid #e8e8e8', color: '#1a1a1a' }}
                 />

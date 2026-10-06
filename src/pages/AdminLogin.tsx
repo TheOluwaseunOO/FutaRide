@@ -1,33 +1,66 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { type View } from '../App'
+import { supabase } from '../lib/supabase'
 
 interface Props {
   onAuth: () => void
-  setView: (v: View) => void
+  setView?: (v: View) => void
 }
 
-const ADMIN_EMAIL = 'transport.admin@futa.edu.ng'
-const ADMIN_PASS  = 'admin2025'
-
 export default function AdminLogin({ onAuth, setView }: Props) {
+  const navigate = useNavigate()
   const [email, setEmail]       = useState('')
   const [password, setPassword] = useState('')
   const [error, setError]       = useState(false)
   const [loading, setLoading]   = useState(false)
+  const [errorMsg, setErrorMsg] = useState('')
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setLoading(true)
     setError(false)
-    setTimeout(() => {
-      if (email.trim().toLowerCase() === ADMIN_EMAIL && password === ADMIN_PASS) {
-        onAuth()
-      } else {
-        setError(true)
-        setPassword('')
+    setErrorMsg('')
+
+    try {
+      // 1. Authenticate with Supabase Auth
+      const { data: authData, error: authErr } = await supabase.auth.signInWithPassword({
+        email: email.trim().toLowerCase(),
+        password,
+      })
+
+      if (authErr || !authData.user) {
+        throw new Error('Invalid email or password.')
       }
+
+      // 2. Check if the authenticated user has the 'admin' role
+      const { data: profileData } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', authData.user.id)
+        .maybeSingle()
+
+      const userRole = (profileData?.role || authData.user.user_metadata?.role || '').toLowerCase()
+
+      if (userRole !== 'admin') {
+        await supabase.auth.signOut()
+        throw new Error('Access denied. This account does not have admin permissions.')
+      }
+
+      onAuth()
+      navigate('/admin')
+    } catch (err: any) {
+      setError(true)
+      setErrorMsg(err.message || 'Invalid credentials. Access denied.')
+      setPassword('')
+    } finally {
       setLoading(false)
-    }, 800)
+    }
+  }
+
+  function handleGoHome() {
+    if (setView) setView('landing')
+    navigate('/')
   }
 
   return (
@@ -35,7 +68,7 @@ export default function AdminLogin({ onAuth, setView }: Props) {
       style={{ background: '#f7f7f7' }}>
       <div className="w-full max-w-sm">
 
-        <button onClick={() => setView('landing')} className="block mb-10 text-center w-full">
+        <button onClick={handleGoHome} className="block mb-10 text-center w-full">
           <img src="/src/assets/logo.png" alt="FutaRide" className="h-8 w-auto" />
         </button>
 
@@ -88,7 +121,7 @@ export default function AdminLogin({ onAuth, setView }: Props) {
               />
               {error && (
                 <p className="text-xs mt-1.5" style={{ color: '#dc2626' }}>
-                  Invalid credentials. Access denied.
+                  {errorMsg || 'Invalid credentials. Access denied.'}
                 </p>
               )}
             </div>
@@ -104,7 +137,7 @@ export default function AdminLogin({ onAuth, setView }: Props) {
 
         <p className="text-center text-xs mt-6" style={{ color: '#a3a3a3' }}>
           Not an admin?{' '}
-          <button onClick={() => setView('landing')} className="font-semibold" style={{ color: '#E6900E' }}>
+          <button onClick={handleGoHome} className="font-semibold" style={{ color: '#E6900E' }}>
             Go back
           </button>
         </p>

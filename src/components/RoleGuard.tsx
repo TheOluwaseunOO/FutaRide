@@ -23,7 +23,7 @@ export function RoleGuard({ allowedRoles, redirectTo, children }: RoleGuardProps
             className="w-10 h-10 border-4 border-amber-500/20 border-t-amber-500 rounded-full animate-spin"
             style={{ borderTopColor: '#E6900E' }}
           />
-          <p className="text-sm font-medium" style={{ color: '#737373' }}>
+          <p className="text-sm font-mono" style={{ color: '#737373' }}>
             Verifying authentication...
           </p>
         </div>
@@ -36,14 +36,17 @@ export function RoleGuard({ allowedRoles, redirectTo, children }: RoleGuardProps
     return <Navigate to="/auth" state={{ from: location }} replace />;
   }
 
-  // Determine user role
-  const userRole = (profile?.role || user.user_metadata?.role || 'student').toLowerCase();
+  // Determine user role (defaults to 'rider')
+  let userRole = (profile?.role || user.user_metadata?.role || 'rider').toLowerCase();
+  // Normalize legacy 'student' to 'rider'
+  if (userRole === 'student') userRole = 'rider';
 
   // If allowedRoles is specified, check role permission
   if (allowedRoles && allowedRoles.length > 0) {
-    const isAllowed = allowedRoles.map(r => r.toLowerCase()).includes(userRole);
+    const normalizedAllowed = allowedRoles.map(r => (r.toLowerCase() === 'student' ? 'rider' : r.toLowerCase()));
+    const isAllowed = normalizedAllowed.includes(userRole);
+
     if (!isAllowed) {
-      // Redirect to their respective authorized dashboard
       if (redirectTo) {
         return <Navigate to={redirectTo} replace />;
       }
@@ -53,7 +56,7 @@ export function RoleGuard({ allowedRoles, redirectTo, children }: RoleGuardProps
       if (userRole === 'admin') {
         return <Navigate to="/admin" replace />;
       }
-      return <Navigate to="/student" replace />;
+      return <Navigate to="/rider" replace />;
     }
   }
 
@@ -79,7 +82,7 @@ export function PublicOnlyRoute({ children }: PublicOnlyRouteProps) {
             className="w-10 h-10 border-4 border-amber-500/20 border-t-amber-500 rounded-full animate-spin"
             style={{ borderTopColor: '#E6900E' }}
           />
-          <p className="text-sm font-medium" style={{ color: '#737373' }}>
+          <p className="text-sm font-mono" style={{ color: '#737373' }}>
             Loading...
           </p>
         </div>
@@ -87,7 +90,6 @@ export function PublicOnlyRoute({ children }: PublicOnlyRouteProps) {
     );
   }
 
-  // Check if the user arrived with explicit auth intents (e.g. clicking "Book a ride" or "I am a Driver")
   const searchParams = new URLSearchParams(location.search);
   const hasExplicitAuthIntent =
     searchParams.has('mode') ||
@@ -95,16 +97,17 @@ export function PublicOnlyRoute({ children }: PublicOnlyRouteProps) {
     searchParams.has('intent') ||
     searchParams.get('force') === 'true';
 
-  // If a session exists and the user didn't explicitly request the auth screen, redirect to their dashboard
   if (user && !hasExplicitAuthIntent) {
-    const userRole = (profile?.role || user.user_metadata?.role || 'student').toLowerCase();
+    let userRole = (profile?.role || user.user_metadata?.role || 'rider').toLowerCase();
+    if (userRole === 'student') userRole = 'rider';
+
     if (userRole === 'driver') {
       return <Navigate to="/driver" replace />;
     }
     if (userRole === 'admin') {
       return <Navigate to="/admin" replace />;
     }
-    return <Navigate to="/student" replace />;
+    return <Navigate to="/rider" replace />;
   }
 
   return children ? <>{children}</> : <Outlet />;

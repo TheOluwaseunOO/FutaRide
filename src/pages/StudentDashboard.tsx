@@ -1,8 +1,12 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { type View } from '../App'
 import { useAuth } from '../context/AuthContext'
 import { supabase } from '../lib/supabase'
+import CancelRideModal from '../components/CancelRideModal'
+import NetworkBanner from '../components/NetworkBanner'
+import EmptyState from '../components/EmptyState'
+import { RideHistorySkeleton, HubSelectionSkeleton } from '../components/SkeletonLoader'
 
 interface LocationHub {
   id: string
@@ -24,7 +28,7 @@ const FALLBACK_HUBS: LocationHub[] = [
   { id: '6', name: 'Aule Junction Hub' },
   { id: '7', name: 'FUTA Junction (Ilesha Rd)' },
   { id: '8', name: 'South Gate / Titilayo' },
-  { id: 'offcampus', name: 'Others (Off-Campus)' },
+  { id: 'offcampus', name: 'Others (Custom Location)' },
 ]
 
 const FALLBACK_FARES: Record<string, number> = {
@@ -55,16 +59,17 @@ const FALLBACK_FARES: Record<string, number> = {
   'School of Engineering (SEET)→FUTA South Gate': 500,
 }
 
-type Phase = 'idle' | 'searching' | 'accepted' | 'arriving' | 'completed'
+type Phase = 'idle' | 'searching' | 'accepted' | 'arriving' | 'completed' | 'expired'
 interface Props { setView?: (v: View) => void }
+
+const TIMEOUT_SECONDS = 180
 
 export default function StudentDashboard({ setView }: Props) {
   const navigate = useNavigate()
   const { user, profile, signOut } = useAuth()
 
-  const displayName = profile?.full_name || user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'Student'
-  const firstName = displayName.split(' ')[0]
-  const matricOrSub = profile?.matric_number || (user?.id ? `ID: ${user.id.slice(0, 8)}...` : 'FUTA Student')
+  const displayName = profile?.full_name || user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'Rider'
+  const matricOrSub = profile?.matric_number || (user?.id ? `ID: ${user.id.slice(0, 8)}...` : 'Campus Rider')
 
   const [hubs, setHubs] = useState<LocationHub[]>(FALLBACK_HUBS)
   const [loadingHubs, setLoadingHubs] = useState(true)
@@ -84,11 +89,23 @@ export default function StudentDashboard({ setView }: Props) {
 
   // Active Ride & Live Negotiation State
   const [activeRideId, setActiveRideId] = useState<string | null>(null)
+  const [rideCreatedAt, setRideCreatedAt] = useState<string | null>(null)
   const [assignedDriver, setAssignedDriver] = useState<AssignedDriver | null>(null)
   const [requestError, setRequestError] = useState<string>('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [phase, setPhase] = useState<Phase>('idle')
   const [tab, setTab] = useState<'book' | 'history'>('book')
+
+  // Timeout Countdown (180s)
+  const [timeLeft, setTimeLeft] = useState<number>(TIMEOUT_SECONDS)
+
+  // Cancellation Modal State
+  const [showCancelModal, setShowCancelModal] = useState(false)
+  const [isCancelling, setIsCancelling] = useState(false)
+
+  // History state
+  const [historyRides, setHistoryRides] = useState<any[]>([])
+  const [loadingHistory, setLoadingHistory] = useState(false)
 
   // Negotiation states
   const [driverQuote, setDriverQuote] = useState<number | null>(null)
@@ -96,45 +113,17 @@ export default function StudentDashboard({ setView }: Props) {
   const [counterPriceInput, setCounterPriceInput] = useState<string>('')
   const [showCounterBox, setShowCounterBox] = useState<boolean>(false)
 
-  const isOffCampusTrip = isPickupOthers || isDropoffOthers
+  const isCustomTrip = isPickupOthers || isDropoffOthers
 
-  const hour = new Date().getHours()
-  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
-
-  // Helper to fetch driver profile by driver_id across tables
   async function fetchDriverInfo(driverId: string) {
     if (!driverId) return
 
     try {
-      // 1. Fetch from driver_profiles
-      const { data: d1 } = await supabase
-        .from('driver_profiles')
-        .select('*')
-        .eq('id', driverId)
-        .maybeSingle()
+      const { data: d1 } = await supabase.from('driver_profiles').select('*').eq('id', driverId).maybeSingle()
+      const { data: p } = await supabase.from('profiles').select('*').eq('id', driverId).maybeSingle()
 
-      // 2. Fetch from profiles
-      const { data: p } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', driverId)
-        .maybeSingle()
-
-      const resolvedName =
-        d1?.full_name ||
-        p?.full_name ||
-        d1?.name ||
-        p?.name ||
-        (p?.first_name ? `${p.first_name} ${p?.last_name || ''}`.trim() : null) ||
-        'Emma John'
-
-      const resolvedPlate =
-        d1?.vehicle_plate_number ||
-        p?.vehicle_plate_number ||
-        d1?.plate_number ||
-        p?.plate_number ||
-        'ABC - 123 - D5'
-
+      const resolvedName = d1?.full_name || p?.full_name || d1?.name || p?.name || 'Assigned Driver'
+      const resolvedPlate = d1?.vehicle_plate_number || p?.vehicle_plate_number || d1?.plate_number || p?.plate_number || 'Keke Unit'
       const resolvedPhone = d1?.phone_number || p?.phone_number || ''
 
       setAssignedDriver({
@@ -144,60 +133,82 @@ export default function StudentDashboard({ setView }: Props) {
       })
     } catch (err) {
       console.error('Error fetching driver details:', err)
-      setAssignedDriver({
-        name: 'Emma John',
-        plate: 'ABC - 123 - D5',
-        phone: '',
-      })
     }
   }
 
-  // 1. Restore active student ride on refresh
-  useEffect(() => {
-    async function restoreStudentRide() {
-      if (!user) return
+  // 1. Restore active rider ride on mount and reconnection recovery
+  const restoreRiderRide = useCallback(async () => {
+    if (!user) return
 
-      try {
-        const { data: ongoing } = await supabase
-          .from('rides')
-          .select('*')
-          .eq('student_id', user.id)
-          .in('status', ['requested', 'accepted', 'in_progress'])
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle()
+    try {
+      const { data: ongoing } = await supabase
+        .from('rides')
+        .select('*')
+        .eq('student_id', user.id)
+        .in('status', ['requested', 'accepted', 'in_progress'])
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
 
-        if (ongoing) {
-          setActiveRideId(ongoing.id)
-          setDynamicFare(Number(ongoing.fare))
-          if (ongoing.custom_pickup) {
-            setIsPickupOthers(true)
-            setCustomPickupText(ongoing.custom_pickup)
-          }
-          if (ongoing.custom_dropoff) {
-            setIsDropoffOthers(true)
-            setCustomDropoffText(ongoing.custom_dropoff)
-          }
-          if (ongoing.fare_quote) setDriverQuote(Number(ongoing.fare_quote))
-          if (ongoing.quote_status) setQuoteStatus(ongoing.quote_status)
-
-          if (ongoing.status === 'requested') {
-            setPhase('searching')
-          } else if (ongoing.status === 'accepted') {
-            setPhase('accepted')
-            if (ongoing.driver_id) fetchDriverInfo(ongoing.driver_id)
-          } else if (ongoing.status === 'in_progress') {
-            setPhase('arriving')
-            if (ongoing.driver_id) fetchDriverInfo(ongoing.driver_id)
+      if (ongoing) {
+        if (ongoing.status === 'requested') {
+          const elapsed = Math.floor((Date.now() - new Date(ongoing.created_at).getTime()) / 1000)
+          if (elapsed >= TIMEOUT_SECONDS) {
+            await supabase.from('rides').update({ status: 'expired' }).eq('id', ongoing.id)
+            setPhase('expired')
+            setActiveRideId(ongoing.id)
+            return
+          } else {
+            setTimeLeft(TIMEOUT_SECONDS - elapsed)
           }
         }
-      } catch (err) {
-        console.error('Error restoring student session:', err)
-      }
-    }
 
-    restoreStudentRide()
-  }, [user])
+        setActiveRideId(ongoing.id)
+        setRideCreatedAt(ongoing.created_at)
+        setDynamicFare(Number(ongoing.fare))
+        if (ongoing.custom_pickup) {
+          setIsPickupOthers(true)
+          setCustomPickupText(ongoing.custom_pickup)
+        }
+        if (ongoing.custom_dropoff) {
+          setIsDropoffOthers(true)
+          setCustomDropoffText(ongoing.custom_dropoff)
+        }
+        if (ongoing.fare_quote) setDriverQuote(Number(ongoing.fare_quote))
+        if (ongoing.quote_status) setQuoteStatus(ongoing.quote_status)
+
+        if (ongoing.status === 'requested') {
+          setPhase('searching')
+        } else if (ongoing.status === 'accepted') {
+          setPhase('accepted')
+          if (ongoing.driver_id) fetchDriverInfo(ongoing.driver_id)
+        } else if (ongoing.status === 'in_progress') {
+          setPhase('arriving')
+          if (ongoing.driver_id) fetchDriverInfo(ongoing.driver_id)
+        }
+      } else {
+        if (phase === 'searching' || phase === 'accepted' || phase === 'arriving') {
+          const { data: lastRide } = await supabase
+            .from('rides')
+            .select('status')
+            .eq('student_id', user.id)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle()
+
+          if (lastRide?.status === 'completed') setPhase('completed')
+          else if (lastRide?.status === 'expired') setPhase('expired')
+          else if (lastRide?.status === 'cancelled') handleResetAfterExpired()
+        }
+      }
+    } catch (err) {
+      console.error('Error restoring rider session:', err)
+    }
+  }, [user, phase])
+
+  useEffect(() => {
+    restoreRiderRide()
+  }, [restoreRiderRide])
 
   // 2. Fetch hubs on mount
   useEffect(() => {
@@ -212,7 +223,7 @@ export default function StudentDashboard({ setView }: Props) {
         if (!error && data && data.length > 0) {
           const hasOthers = data.some(h => h.name.toLowerCase().includes('others'))
           if (!hasOthers) {
-            setHubs([...data, { id: 'offcampus', name: 'Others (Off-Campus)' }])
+            setHubs([...data, { id: 'offcampus', name: 'Others' }])
           } else {
             setHubs(data)
           }
@@ -234,8 +245,9 @@ export default function StudentDashboard({ setView }: Props) {
       return
     }
 
-    if (isOffCampusTrip) {
+    if (isCustomTrip) {
       setDynamicFare(0)
+      setActiveRouteId(null)
       return
     }
 
@@ -264,6 +276,72 @@ export default function StudentDashboard({ setView }: Props) {
     resolveRoute()
   }, [pickupHub, dropoffHub, isPickupOthers, isDropoffOthers])
 
+  // 4. Fetch trip history
+  useEffect(() => {
+    if (tab !== 'history' || !user) return
+
+    async function fetchHistory() {
+      setLoadingHistory(true)
+      try {
+        const { data: ridesData, error: ridesErr } = await supabase
+          .from('rides')
+          .select('*')
+          .eq('student_id', user.id)
+          .order('created_at', { ascending: false })
+
+        if (ridesErr) throw ridesErr
+        if (!ridesData || ridesData.length === 0) {
+          setHistoryRides([])
+          return
+        }
+
+        const [{ data: routesData }, { data: locsData }] = await Promise.all([
+          supabase.from('routes').select('id, pickup_location_id, dropoff_location_id'),
+          supabase.from('locations').select('id, name'),
+        ])
+
+        const locMap = new Map((locsData || []).map(l => [l.id, l.name]))
+        const routeMap = new Map(
+          (routesData || []).map(r => [
+            r.id,
+            {
+              pickup: locMap.get(r.pickup_location_id) || 'Campus Hub',
+              dropoff: locMap.get(r.dropoff_location_id) || 'Campus Hub',
+            },
+          ])
+        )
+
+        const formatted = ridesData.map(r => {
+          const route = r.route_id ? routeMap.get(r.route_id) : null
+          const pickupName = r.custom_pickup || route?.pickup || 'Campus Hub'
+          const dropoffName = r.custom_dropoff || route?.dropoff || 'Campus Hub'
+
+          return {
+            id: r.id,
+            pickup: pickupName,
+            dropoff: dropoffName,
+            fare: r.fare ?? 0,
+            status: r.status,
+            date: new Date(r.created_at || Date.now()).toLocaleDateString(undefined, {
+              month: 'short',
+              day: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit',
+            }),
+          }
+        })
+
+        setHistoryRides(formatted)
+      } catch (err: any) {
+        console.error('History fetch error:', err)
+      } finally {
+        setLoadingHistory(false)
+      }
+    }
+
+    fetchHistory()
+  }, [tab, user])
+
   const canRequest =
     (isPickupOthers ? customPickupText.trim().length > 0 : !!pickupHub) &&
     (isDropoffOthers ? customDropoffText.trim().length > 0 : !!dropoffHub)
@@ -271,7 +349,37 @@ export default function StudentDashboard({ setView }: Props) {
   const displayPickup = isPickupOthers ? customPickupText.trim() : pickupHub?.name || ''
   const displayDest = isDropoffOthers ? customDropoffText.trim() : dropoffHub?.name || ''
 
-  // 4. Realtime subscription for active ride updates & negotiations
+  // 5. FR-56: 180s Countdown Timer during 'searching'
+  useEffect(() => {
+    if (phase !== 'searching' || !activeRideId) return
+
+    const timer = setInterval(async () => {
+      let secondsRemaining = 0
+
+      if (rideCreatedAt) {
+        const elapsed = Math.floor((Date.now() - new Date(rideCreatedAt).getTime()) / 1000)
+        secondsRemaining = Math.max(0, TIMEOUT_SECONDS - elapsed)
+      } else {
+        secondsRemaining = Math.max(0, timeLeft - 1)
+      }
+
+      setTimeLeft(secondsRemaining)
+
+      if (secondsRemaining <= 0) {
+        clearInterval(timer)
+        try {
+          await supabase.from('rides').update({ status: 'expired' }).eq('id', activeRideId)
+        } catch (err) {
+          console.error('Failed updating expired ride status:', err)
+        }
+        setPhase('expired')
+      }
+    }, 1000)
+
+    return () => clearInterval(timer)
+  }, [phase, activeRideId, rideCreatedAt, timeLeft])
+
+  // 6. Realtime subscription for active ride updates & negotiations
   useEffect(() => {
     if (!activeRideId) return
 
@@ -288,43 +396,20 @@ export default function StudentDashboard({ setView }: Props) {
         async (payload) => {
           const row = payload.new as any
 
-          if (row.fare_quote) {
-            setDriverQuote(Number(row.fare_quote))
-          }
-          if (row.quote_status) {
-            setQuoteStatus(row.quote_status)
-          }
+          if (row.fare_quote) setDriverQuote(Number(row.fare_quote))
+          if (row.quote_status) setQuoteStatus(row.quote_status)
 
           if (row.status === 'accepted') {
             setDynamicFare(Number(row.fare))
             setPhase('accepted')
-
-            const targetDriverId = row.driver_id
-            if (targetDriverId) {
-              await fetchDriverInfo(targetDriverId)
-            } else {
-              const { data: fresh } = await supabase
-                .from('rides')
-                .select('driver_id')
-                .eq('id', activeRideId)
-                .single()
-              if (fresh?.driver_id) await fetchDriverInfo(fresh.driver_id)
-            }
+            if (row.driver_id) await fetchDriverInfo(row.driver_id)
           } else if (row.status === 'in_progress') {
             setPhase('arriving')
-            const targetDriverId = row.driver_id
-            if (targetDriverId) {
-              await fetchDriverInfo(targetDriverId)
-            } else {
-              const { data: fresh } = await supabase
-                .from('rides')
-                .select('driver_id')
-                .eq('id', activeRideId)
-                .single()
-              if (fresh?.driver_id) await fetchDriverInfo(fresh.driver_id)
-            }
+            if (row.driver_id) await fetchDriverInfo(row.driver_id)
           } else if (row.status === 'completed') {
             setPhase('completed')
+          } else if (row.status === 'expired') {
+            setPhase('expired')
           } else if (row.status === 'cancelled') {
             setPhase('idle')
             setActiveRideId(null)
@@ -341,46 +426,51 @@ export default function StudentDashboard({ setView }: Props) {
 
   async function handleRequest() {
     if (!canRequest || !user) return
+    if (!navigator.onLine) {
+      setRequestError('You are currently offline. Please check your connection before requesting.')
+      return
+    }
+
     setIsSubmitting(true)
     setRequestError('')
 
     try {
-      let routeId = activeRouteId
+      const finalPickup = isPickupOthers ? customPickupText.trim() : pickupHub?.name || null
+      const finalDropoff = isDropoffOthers ? customDropoffText.trim() : dropoffHub?.name || null
 
-      if (!routeId) {
-        const { data: routeData } = await supabase.from('routes').select('id').limit(1).maybeSingle()
-        routeId = routeData?.id || null
-      }
-
-      const initialFare = isOffCampusTrip ? 0 : (dynamicFare ?? 500)
+      const finalRouteId = isCustomTrip ? null : activeRouteId
+      const initialFare = isCustomTrip ? 0 : (dynamicFare ?? 500)
+      const nowIso = new Date().toISOString()
 
       const { data: rideData, error: rideErr } = await supabase
         .from('rides')
         .insert({
           student_id: user.id,
-          route_id: routeId,
+          route_id: finalRouteId,
           fare: initialFare,
           status: 'requested',
-          custom_pickup: isPickupOthers ? customPickupText.trim() : null,
-          custom_dropoff: isDropoffOthers ? customDropoffText.trim() : null,
-          quote_status: isOffCampusTrip ? 'none' : 'agreed',
+          custom_pickup: finalPickup,
+          custom_dropoff: finalDropoff,
+          quote_status: isCustomTrip ? 'none' : 'agreed',
+          created_at: nowIso,
         })
-        .select('id')
+        .select('id, created_at')
         .single()
 
       if (rideErr) throw rideErr
 
       setActiveRideId(rideData.id)
+      setRideCreatedAt(rideData.created_at || nowIso)
+      setTimeLeft(TIMEOUT_SECONDS)
       setPhase('searching')
     } catch (err: any) {
       console.error('Ride request error:', err)
-      setRequestError(err?.message || 'Failed to request ride. Please try again.')
+      setRequestError(err?.message || 'Failed to request ride. Please check network connection and try again.')
     } finally {
       setIsSubmitting(false)
     }
   }
 
-  // Student accepts the driver's proposed quote
   async function handleAcceptQuote() {
     if (!activeRideId || !driverQuote) return
     setIsSubmitting(true)
@@ -399,7 +489,6 @@ export default function StudentDashboard({ setView }: Props) {
     }
   }
 
-  // Student sends counter-offer
   async function handleSendCounter() {
     const val = Number(counterPriceInput)
     if (!activeRideId || isNaN(val) || val <= 0) return
@@ -420,17 +509,47 @@ export default function StudentDashboard({ setView }: Props) {
     }
   }
 
-  async function handleCancelRequest() {
-    if (activeRideId) {
-      await supabase.from('rides').update({ status: 'cancelled' }).eq('id', activeRideId)
+  async function handleConfirmCancel(reason: string) {
+    if (!activeRideId || !user) return
+    setIsCancelling(true)
+
+    try {
+      await supabase
+        .from('rides')
+        .update({
+          status: 'cancelled',
+          cancellation_reason: reason,
+          cancelled_by: user.id,
+          cancelled_at: new Date().toISOString(),
+        })
+        .eq('id', activeRideId)
+
+      setShowCancelModal(false)
+      setPhase('idle')
+      setActiveRideId(null)
+      setAssignedDriver(null)
+      setDriverQuote(null)
+      setQuoteStatus('none')
+      setPickupHub(null)
+      setIsPickupOthers(false)
+      setCustomPickupText('')
+      setDropoffHub(null)
+      setIsDropoffOthers(false)
+      setCustomDropoffText('')
+      setDynamicFare(null)
+    } catch (err) {
+      console.error('Cancellation error:', err)
+    } finally {
+      setIsCancelling(false)
     }
+  }
+
+  function handleResetAfterExpired() {
     setPhase('idle')
     setActiveRideId(null)
     setAssignedDriver(null)
     setDriverQuote(null)
     setQuoteStatus('none')
-
-    // Clear selection
     setPickupHub(null)
     setIsPickupOthers(false)
     setCustomPickupText('')
@@ -441,16 +560,25 @@ export default function StudentDashboard({ setView }: Props) {
   }
 
   return (
-    <div className="min-h-screen flex flex-col" style={{ background: '#f7f7f7' }}>
-      {/* Header */}
-      <header className="sticky top-0 z-40 flex items-center justify-between px-5 md:px-8 h-16 bg-white" style={{ borderBottom: '1px solid #e8e8e8' }}>
-        <button onClick={() => { if (setView) setView('landing'); navigate('/') }}>
-          <img src="/src/assets/logo.png" alt="FutaRide" className="h-7 w-auto" />
+    <div className="min-h-screen flex flex-col font-sans pb-12 sm:pb-8" style={{ background: '#f7f7f7' }}>
+      {/* Network Connectivity Banner */}
+      <NetworkBanner onReconnect={restoreRiderRide} />
+
+      {/* Top Header */}
+      <header className="sticky top-0 z-40 flex items-center justify-between px-4 sm:px-8 h-14 sm:h-16 bg-white/95 backdrop-blur border-b border-neutral-200">
+        <button
+          onClick={() => { if (setView) setView('landing'); navigate('/') }}
+          className="active:scale-95 transition-transform"
+        >
+          <img src="/src/assets/logo.png" alt="FutaRide" className="h-6 sm:h-7 w-auto" />
         </button>
-        <div className="flex items-center gap-3">
-          <div className="hidden sm:block text-right">
-            <p className="text-sm font-semibold leading-none" style={{ color: '#1a1a1a' }}>{displayName}</p>
-            <p className="text-xs mt-0.5" style={{ color: '#737373' }}>{matricOrSub}</p>
+
+        <div className="flex items-center gap-2 sm:gap-3">
+          <div className="text-right">
+            <p className="text-xs sm:text-sm font-bold leading-tight text-neutral-900 truncate max-w-[120px] sm:max-w-[180px]">
+              {displayName}
+            </p>
+            <p className="text-[10px] sm:text-xs text-neutral-500 font-mono">{matricOrSub}</p>
           </div>
           <button
             onClick={async () => {
@@ -458,22 +586,26 @@ export default function StudentDashboard({ setView }: Props) {
               if (setView) setView('landing')
               navigate('/')
             }}
-            className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-neutral-200 text-neutral-600 hover:bg-neutral-100"
+            className="text-xs font-semibold px-2.5 py-1.5 rounded-lg border border-neutral-200 text-neutral-600 hover:bg-neutral-100 transition-colors"
           >
             Sign Out
           </button>
         </div>
       </header>
 
-      {/* Main Content Area */}
-      <div className="flex-1 max-w-lg mx-auto w-full px-5 py-6">
-        <div className="flex gap-1 mb-5 p-1 rounded-xl bg-white border border-neutral-200">
+      {/* Main Body */}
+      <div className="flex-1 max-w-lg mx-auto w-full px-4 sm:px-5 py-5 sm:py-6">
+        {/* Tab Toggle */}
+        <div className="flex gap-1 mb-5 p-1 rounded-xl bg-white border border-neutral-200 shadow-sm">
           {(['book', 'history'] as const).map(t => (
             <button
               key={t}
               onClick={() => setTab(t)}
-              className="flex-1 py-2 rounded-lg text-sm font-semibold transition-all"
-              style={{ background: tab === t ? '#1a1a1a' : 'transparent', color: tab === t ? '#fff' : '#737373' }}
+              className="flex-1 py-2 sm:py-2.5 rounded-lg text-xs sm:text-sm font-bold transition-all active:scale-[0.98]"
+              style={{
+                background: tab === t ? '#1a1a1a' : 'transparent',
+                color: tab === t ? '#fff' : '#737373',
+              }}
             >
               {t === 'book' ? 'Book a Ride' : 'My History'}
             </button>
@@ -483,84 +615,44 @@ export default function StudentDashboard({ setView }: Props) {
         {tab === 'book' && (
           <>
             {phase === 'idle' && (
-              <div className="rounded-2xl overflow-hidden bg-white border border-neutral-200">
+              <div className="rounded-2xl overflow-hidden bg-white border border-neutral-200 shadow-sm">
                 {/* 1. PICKUP SELECTION */}
-                <div className="p-5 pb-4 border-b border-neutral-100">
+                <div className="p-4 sm:p-5 pb-4 border-b border-neutral-100">
                   <div className="flex items-center gap-2 mb-3">
-                    <span className="w-5 h-5 rounded-full text-xs font-black flex items-center justify-center bg-amber-500 text-white">1</span>
-                    <p className="text-xs font-bold uppercase tracking-widest text-neutral-500">Pickup Location</p>
-                    {displayPickup && <span className="ml-auto text-xs font-semibold text-amber-600 truncate max-w-[150px]">{displayPickup}</span>}
+                    <span className="w-5 h-5 rounded-full text-[11px] font-black flex items-center justify-center bg-amber-500 text-white flex-shrink-0">
+                      1
+                    </span>
+                    <p className="text-xs font-bold uppercase tracking-wider text-neutral-500">Pickup Location</p>
+                    {displayPickup && (
+                      <span className="ml-auto text-xs font-bold text-amber-600 truncate max-w-[140px] sm:max-w-[200px]">
+                        {displayPickup}
+                      </span>
+                    )}
                   </div>
 
-                  <div className="grid grid-cols-2 gap-1.5">
-                    {hubs.map(h => {
-                      const isOthers = h.name.toLowerCase().includes('others')
-                      const selected = isOthers ? isPickupOthers : (!isPickupOthers && pickupHub?.id === h.id)
-                      return (
-                        <button
-                          key={h.id}
-                          onClick={() => {
-                            if (isOthers) {
-                              setIsPickupOthers(true)
-                              setPickupHub(h)
-                            } else {
-                              setIsPickupOthers(false)
-                              setPickupHub(h)
-                              setCustomPickupText('')
-                            }
-                          }}
-                          className={`px-3 py-2.5 rounded-xl text-xs font-medium text-left leading-snug ${isOthers ? 'col-span-2' : ''}`}
-                          style={{
-                            background: selected ? '#1a1a1a' : '#f7f7f7',
-                            color: selected ? '#fff' : '#1a1a1a',
-                            border: isOthers ? '1px dashed #d4d4d4' : '1px solid transparent',
-                          }}
-                        >
-                          {h.name}
-                        </button>
-                      )
-                    })}
-                  </div>
-
-                  {isPickupOthers && (
-                    <input
-                      type="text"
-                      value={customPickupText}
-                      onChange={e => setCustomPickupText(e.target.value)}
-                      placeholder="Type your exact off-campus pickup (e.g. South Gate Titilayo Junction)"
-                      className="w-full mt-2.5 px-4 py-3 rounded-xl text-sm bg-neutral-50 border border-neutral-200 focus:outline-none focus:border-amber-500"
-                    />
-                  )}
-                </div>
-
-                {/* 2. DROP-OFF SELECTION */}
-                <div className="p-5 border-b border-neutral-100">
-                  <div className="flex items-center gap-2 mb-3">
-                    <span className="w-5 h-5 rounded-full text-xs font-black flex items-center justify-center bg-neutral-900 text-white">2</span>
-                    <p className="text-xs font-bold uppercase tracking-widest text-neutral-500">Drop-off Destination</p>
-                    {displayDest && <span className="ml-auto text-xs font-semibold text-neutral-900 truncate max-w-[150px]">{displayDest}</span>}
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-1.5">
-                    {hubs
-                      .filter(h => isPickupOthers || h.id !== pickupHub?.id)
-                      .map(h => {
+                  {loadingHubs ? (
+                    <HubSelectionSkeleton />
+                  ) : (
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {hubs.map(h => {
                         const isOthers = h.name.toLowerCase().includes('others')
-                        const selected = isOthers ? isDropoffOthers : (!isDropoffOthers && dropoffHub?.id === h.id)
+                        const selected = isOthers ? isPickupOthers : (!isPickupOthers && pickupHub?.id === h.id)
                         return (
                           <button
                             key={h.id}
                             onClick={() => {
                               if (isOthers) {
-                                setIsDropoffOthers(true)
-                                setDropoffHub(h)
+                                setIsPickupOthers(true)
+                                setPickupHub(null)
                               } else {
-                                setIsDropoffOthers(false)
-                                setDropoffHub(h)
-                                setCustomDropoffText('')
+                                setIsPickupOthers(false)
+                                setPickupHub(h)
+                                setCustomPickupText('')
                               }
                             }}
-                            className={`px-3 py-2.5 rounded-xl text-xs font-medium text-left leading-snug ${isOthers ? 'col-span-2' : ''}`}
+                            className={`px-3 py-2.5 rounded-xl text-xs font-semibold text-left transition-all active:scale-[0.98] leading-tight ${
+                              isOthers ? 'col-span-2' : ''
+                            }`}
                             style={{
                               background: selected ? '#1a1a1a' : '#f7f7f7',
                               color: selected ? '#fff' : '#1a1a1a',
@@ -571,68 +663,143 @@ export default function StudentDashboard({ setView }: Props) {
                           </button>
                         )
                       })}
+                    </div>
+                  )}
+
+                  {isPickupOthers && (
+                    <input
+                      type="text"
+                      value={customPickupText}
+                      onChange={e => setCustomPickupText(e.target.value)}
+                      placeholder="Type custom location (e.g. SLIT, School Park, Off-Campus...)"
+                      className="w-full mt-2.5 px-3.5 py-2.5 sm:py-3 rounded-xl text-xs sm:text-sm bg-neutral-50 border border-neutral-200 focus:outline-none focus:border-amber-500 transition-colors"
+                    />
+                  )}
+                </div>
+
+                {/* 2. DROP-OFF SELECTION */}
+                <div className="p-4 sm:p-5 border-b border-neutral-100">
+                  <div className="flex items-center gap-2 mb-3">
+                    <span className="w-5 h-5 rounded-full text-[11px] font-black flex items-center justify-center bg-neutral-900 text-white flex-shrink-0">
+                      2
+                    </span>
+                    <p className="text-xs font-bold uppercase tracking-wider text-neutral-500">Drop-off Destination</p>
+                    {displayDest && (
+                      <span className="ml-auto text-xs font-bold text-neutral-900 truncate max-w-[140px] sm:max-w-[200px]">
+                        {displayDest}
+                      </span>
+                    )}
                   </div>
+
+                  {loadingHubs ? (
+                    <HubSelectionSkeleton />
+                  ) : (
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {hubs
+                        .filter(h => isPickupOthers || h.id !== pickupHub?.id)
+                        .map(h => {
+                          const isOthers = h.name.toLowerCase().includes('others')
+                          const selected = isOthers ? isDropoffOthers : (!isDropoffOthers && dropoffHub?.id === h.id)
+                          return (
+                            <button
+                              key={h.id}
+                              onClick={() => {
+                                if (isOthers) {
+                                  setIsDropoffOthers(true)
+                                  setDropoffHub(null)
+                                } else {
+                                  setIsDropoffOthers(false)
+                                  setDropoffHub(h)
+                                  setCustomDropoffText('')
+                                }
+                              }}
+                              className={`px-3 py-2.5 rounded-xl text-xs font-semibold text-left transition-all active:scale-[0.98] leading-tight ${
+                                isOthers ? 'col-span-2' : ''
+                              }`}
+                              style={{
+                                background: selected ? '#1a1a1a' : '#f7f7f7',
+                                color: selected ? '#fff' : '#1a1a1a',
+                                border: isOthers ? '1px dashed #d4d4d4' : '1px solid transparent',
+                              }}
+                            >
+                              {h.name}
+                            </button>
+                          )
+                        })}
+                    </div>
+                  )}
 
                   {isDropoffOthers && (
                     <input
                       type="text"
                       value={customDropoffText}
                       onChange={e => setCustomDropoffText(e.target.value)}
-                      placeholder="Type your exact off-campus destination (e.g. Alagbaka, Akure Town)"
-                      className="w-full mt-2.5 px-4 py-3 rounded-xl text-sm bg-neutral-50 border border-neutral-200 focus:outline-none focus:border-amber-500"
+                      placeholder="Type custom destination (e.g. SLIT, Hilltop, Off-Campus...)"
+                      className="w-full mt-2.5 px-3.5 py-2.5 sm:py-3 rounded-xl text-xs sm:text-sm bg-neutral-50 border border-neutral-200 focus:outline-none focus:border-amber-500 transition-colors"
                     />
                   )}
                 </div>
 
-                {/* Fare Summary & Request CTA */}
+                {/* Fare Summary & Action Button */}
                 {canRequest && (
-                  <div className="p-5">
-                    {isOffCampusTrip ? (
-                      <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 mb-3 text-xs leading-relaxed text-amber-900">
-                        <p className="font-bold mb-0.5">Off-Campus Custom Fare Negotiation</p>
-                        Drivers will quote their price for this specific location. You can accept or counter-offer before the ride starts.
+                  <div className="p-4 sm:p-5">
+                    {isCustomTrip ? (
+                      <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 mb-3 text-xs leading-relaxed text-amber-900">
+                        <p className="font-bold mb-0.5">Custom Route Fare</p>
+                        Drivers will submit quotes for unlisted campus and off-campus trips. You can accept or negotiate quotes in real time.
                       </div>
                     ) : (
-                      <div className="flex items-center justify-between p-4 rounded-xl bg-orange-50 border border-orange-200 mb-3">
+                      <div className="flex items-center justify-between p-3.5 rounded-xl bg-orange-50 border border-orange-200 mb-3">
                         <div>
-                          <p className="text-xs font-semibold text-orange-600">Fixed Campus Fare</p>
-                          <p className="text-xs text-neutral-500">Standard rate · Cash on arrival</p>
+                          <p className="text-xs font-bold text-orange-600">Fixed Campus Fare</p>
+                          <p className="text-[11px] text-neutral-500">Standard rate · Pay cash on arrival</p>
                         </div>
                         <span className="text-2xl font-black text-amber-600">₦{dynamicFare ?? 500}</span>
                       </div>
                     )}
 
-                    {requestError && <p className="text-xs text-red-600 font-semibold mb-2">{requestError}</p>}
+                    {requestError && (
+                      <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs font-semibold text-red-600 mb-3">
+                        {requestError}
+                      </div>
+                    )}
 
                     <button
                       onClick={handleRequest}
                       disabled={isSubmitting}
-                      className="w-full py-4 rounded-xl font-bold text-sm bg-amber-500 text-white hover:bg-amber-600 transition-all"
+                      className="w-full py-3.5 sm:py-4 rounded-xl font-bold text-xs sm:text-sm bg-amber-500 text-white hover:bg-amber-600 active:scale-[0.99] transition-all shadow-sm disabled:opacity-50"
                     >
-                      {isSubmitting ? 'Requesting...' : isOffCampusTrip ? 'Request Off-Campus Ride' : 'Request Ride'}
+                      {isSubmitting ? 'Requesting...' : isCustomTrip ? 'Request Custom Ride' : 'Request Ride'}
                     </button>
                   </div>
                 )}
               </div>
             )}
 
-            {/* 1. REQUESTED (SEARCHING & NEGOTIATING) */}
+            {/* Phase: Searching */}
             {phase === 'searching' && (
-              <div className="bg-white rounded-2xl p-7 text-center border border-neutral-200">
-                <div className="w-14 h-14 rounded-full mx-auto mb-4 flex items-center justify-center bg-orange-50 border-2 border-orange-200 text-2xl">
+              <div className="bg-white rounded-2xl p-6 sm:p-8 text-center border border-neutral-200 shadow-sm">
+                <div className="w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center bg-orange-50 border-2 border-orange-200 text-3xl shadow-inner">
                   🛺
                 </div>
 
-                <h2 className="text-xl font-black mb-1">
-                  {driverQuote ? 'Driver Quoted a Fare' : 'Finding Nearby Drivers…'}
+                <h2 className="text-lg sm:text-xl font-black text-neutral-900 mb-1">
+                  {driverQuote ? 'Driver Quoted a Fare' : 'Looking for Nearby Drivers…'}
                 </h2>
-                <p className="text-sm text-neutral-500 mb-3">
-                  {displayPickup} → {displayDest}
+                <p className="text-xs sm:text-sm text-neutral-500 mb-4 px-2">
+                  <span className="font-semibold">{displayPickup}</span> → <span className="font-semibold">{displayDest}</span>
                 </p>
 
-                {/* Off-Campus Live Negotiation Box */}
-                {isOffCampusTrip && (
-                  <div className="my-5 p-4 rounded-2xl bg-neutral-50 border border-neutral-200 text-left">
+                {/* Expiration countdown pill */}
+                <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-neutral-100 text-xs font-semibold text-neutral-700 mb-5">
+                  <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                  <span>
+                    Auto-expires in: {Math.floor(timeLeft / 60)}:{(timeLeft % 60).toString().padStart(2, '0')}
+                  </span>
+                </div>
+
+                {isCustomTrip && (
+                  <div className="my-4 p-4 rounded-xl bg-neutral-50 border border-neutral-200 text-left">
                     {driverQuote ? (
                       <div>
                         <div className="flex items-center justify-between mb-3">
@@ -648,15 +815,15 @@ export default function StudentDashboard({ setView }: Props) {
                           <div className="flex gap-2">
                             <button
                               onClick={handleAcceptQuote}
-                              className="flex-1 py-2.5 rounded-xl font-bold text-xs bg-amber-500 text-white hover:bg-amber-600"
+                              className="flex-1 py-2.5 rounded-xl font-bold text-xs bg-amber-500 text-white hover:bg-amber-600 active:scale-95 transition-all"
                             >
                               Accept ₦{driverQuote}
                             </button>
                             <button
                               onClick={() => setShowCounterBox(b => !b)}
-                              className="px-4 py-2.5 rounded-xl font-bold text-xs bg-neutral-200 text-neutral-800 hover:bg-neutral-300"
+                              className="px-4 py-2.5 rounded-xl font-bold text-xs bg-neutral-200 text-neutral-800 hover:bg-neutral-300 active:scale-95 transition-all"
                             >
-                              Counter Offer
+                              Counter
                             </button>
                           </div>
                         )}
@@ -687,31 +854,44 @@ export default function StudentDashboard({ setView }: Props) {
                   </div>
                 )}
 
-                <button
-                  onClick={handleCancelRequest}
-                  className="text-xs font-semibold px-5 py-2.5 rounded-xl border border-red-200 text-red-600 hover:bg-red-50"
-                >
-                  Cancel Request
-                </button>
+                <div className="pt-2">
+                  <button
+                    onClick={() => setShowCancelModal(true)}
+                    className="text-xs font-bold px-5 py-2.5 rounded-xl border border-red-200 text-red-600 hover:bg-red-50 transition-colors"
+                  >
+                    Cancel Request
+                  </button>
+                </div>
               </div>
             )}
 
-            {/* 2. ACCEPTED (DRIVER ASSIGNED & HEADING TO PICKUP) */}
+            {/* Phase: Expired */}
+            {phase === 'expired' && (
+              <EmptyState
+                icon="⏱"
+                title="Request Timed Out"
+                description="No drivers were able to accept your trip within 3 minutes. Drivers may currently be busy on other campus routes."
+                actionLabel="Try Again"
+                onAction={handleRequest}
+              />
+            )}
+
+            {/* Phase: Accepted */}
             {phase === 'accepted' && (
-              <div className="bg-white rounded-2xl overflow-hidden border border-neutral-200">
-                <div className="px-5 py-3 bg-amber-500 text-white text-xs font-mono uppercase tracking-widest font-bold flex items-center gap-2">
+              <div className="bg-white rounded-2xl overflow-hidden border border-neutral-200 shadow-sm">
+                <div className="px-5 py-3 bg-amber-500 text-white text-xs uppercase tracking-widest font-bold flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
-                  <span>Driver Accepted — Heading to Pickup</span>
+                  <span>Driver Accepted, Heading to Pickup</span>
                 </div>
-                <div className="p-5">
+                <div className="p-4 sm:p-5">
                   <div className="flex items-center gap-3.5 mb-4 p-3.5 rounded-xl bg-neutral-50 border border-neutral-100">
-                    <div className="w-12 h-12 rounded-full bg-amber-100 flex items-center justify-center text-xl flex-shrink-0">
+                    <div className="w-12 h-12 rounded-xl bg-amber-100 flex items-center justify-center text-2xl flex-shrink-0">
                       🛺
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="font-bold text-neutral-900">{assignedDriver?.name || 'Emma John'}</p>
-                      <p className="text-xs text-neutral-500">Vehicle Plate</p>
-                      <p className="text-xs font-mono font-bold text-amber-600 mt-0.5">{assignedDriver?.plate || 'ABC - 123 - D5'}</p>
+                      <p className="font-bold text-neutral-900 text-sm truncate">{assignedDriver?.name || 'Assigned Driver'}</p>
+                      <p className="text-[11px] text-neutral-500">Vehicle Plate</p>
+                      <p className="text-xs font-bold text-amber-600">{assignedDriver?.plate || 'Keke Unit'}</p>
                     </div>
                   </div>
 
@@ -726,14 +906,14 @@ export default function StudentDashboard({ setView }: Props) {
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between mb-4 p-3 rounded-xl bg-amber-50 border border-amber-200">
-                    <span className="text-xs font-bold text-amber-900">Fare:</span>
+                  <div className="flex items-center justify-between mb-4 p-3.5 rounded-xl bg-amber-50 border border-amber-200">
+                    <span className="text-xs font-bold text-amber-900">Agreed Fare:</span>
                     <span className="text-xl font-black text-amber-600">₦{dynamicFare}</span>
                   </div>
 
                   <button
-                    onClick={handleCancelRequest}
-                    className="w-full py-2.5 rounded-xl text-xs font-semibold border border-neutral-300 text-neutral-600 hover:bg-neutral-50"
+                    onClick={() => setShowCancelModal(true)}
+                    className="w-full py-2.5 rounded-xl text-xs font-bold border border-neutral-300 text-neutral-600 hover:bg-neutral-50 transition-colors"
                   >
                     Cancel Ride
                   </button>
@@ -741,15 +921,15 @@ export default function StudentDashboard({ setView }: Props) {
               </div>
             )}
 
-            {/* 3. IN PROGRESS (PASSENGER BOARDED) */}
+            {/* Phase: In Progress */}
             {phase === 'arriving' && (
-              <div className="bg-white rounded-2xl overflow-hidden border border-neutral-200">
-                <div className="px-5 py-3 bg-neutral-900 text-white text-xs font-mono uppercase tracking-widest font-bold flex items-center gap-2">
+              <div className="bg-white rounded-2xl overflow-hidden border border-neutral-200 shadow-sm">
+                <div className="px-5 py-3 bg-neutral-900 text-white text-xs uppercase tracking-widest font-bold flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                   <span>Ride In Progress — En Route</span>
                 </div>
-                <div className="p-5 text-center">
-                  <div className="w-14 h-14 rounded-full mx-auto mb-3 bg-neutral-50 border border-neutral-200 flex items-center justify-center text-2xl">
+                <div className="p-6 text-center">
+                  <div className="w-14 h-14 rounded-2xl mx-auto mb-3 bg-neutral-50 border border-neutral-200 flex items-center justify-center text-3xl shadow-inner">
                     🛺
                   </div>
                   <h3 className="text-lg font-black text-neutral-900 mb-1">On the way to destination</h3>
@@ -758,34 +938,31 @@ export default function StudentDashboard({ setView }: Props) {
                   <div className="p-3 rounded-xl bg-neutral-50 border border-neutral-100 mb-4 text-xs flex justify-between items-center">
                     <span className="text-neutral-500">Driver:</span>
                     <span className="font-bold text-neutral-800">
-                      {assignedDriver?.name || 'Emma John'} ({assignedDriver?.plate || 'ABC - 123 - D5'})
+                      {assignedDriver?.name} ({assignedDriver?.plate})
                     </span>
                   </div>
 
-                  <p className="text-xs text-neutral-400">Driver will mark completion upon arrival.</p>
+                  <p className="text-xs text-neutral-400">Driver will complete trip upon arrival.</p>
                 </div>
               </div>
             )}
 
-            {/* 4. COMPLETED */}
+            {/* Phase: Completed */}
             {phase === 'completed' && (
-              <div className="bg-white rounded-2xl p-7 text-center border border-neutral-200">
-                <div className="w-14 h-14 rounded-full mx-auto mb-3 bg-green-50 text-green-600 flex items-center justify-center font-bold text-2xl">
+              <div className="bg-white rounded-2xl p-7 text-center border border-neutral-200 shadow-sm">
+                <div className="w-14 h-14 rounded-2xl mx-auto mb-3 bg-green-50 text-green-600 flex items-center justify-center font-bold text-2xl shadow-inner">
                   ✓
                 </div>
                 <h2 className="text-xl font-black mb-1">Ride Complete!</h2>
-                <p className="text-sm text-neutral-500 mb-4">{displayPickup} → {displayDest}</p>
+                <p className="text-xs sm:text-sm text-neutral-500 mb-3">{displayPickup} → {displayDest}</p>
                 <p className="text-3xl font-black text-amber-600 mb-6">₦{dynamicFare}</p>
                 <button
                   onClick={() => {
-                    // Reset lifecycle & trip IDs
                     setPhase('idle')
                     setActiveRideId(null)
                     setAssignedDriver(null)
                     setDriverQuote(null)
                     setQuoteStatus('none')
-
-                    // Reset location selections cleanly to blank
                     setPickupHub(null)
                     setIsPickupOthers(false)
                     setCustomPickupText('')
@@ -794,7 +971,7 @@ export default function StudentDashboard({ setView }: Props) {
                     setCustomDropoffText('')
                     setDynamicFare(null)
                   }}
-                  className="px-6 py-3 rounded-xl bg-amber-500 text-white font-bold text-sm hover:bg-amber-600 transition-all"
+                  className="px-6 py-3 rounded-xl bg-amber-500 text-white font-bold text-xs sm:text-sm hover:bg-amber-600 active:scale-95 transition-all shadow-sm"
                 >
                   Book Another Ride
                 </button>
@@ -802,7 +979,61 @@ export default function StudentDashboard({ setView }: Props) {
             )}
           </>
         )}
+
+        {/* Tab: My History */}
+        {tab === 'history' && (
+          <div className="space-y-3">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-500 mb-2">Past Trips</h2>
+            {loadingHistory ? (
+              <RideHistorySkeleton />
+            ) : historyRides.length === 0 ? (
+              <EmptyState
+                icon="🛺"
+                title="No Trips Recorded"
+                description="You haven't order any rides yet. Going somewhere?"
+                actionLabel="Book a Ride Now"
+                onAction={() => setTab('book')}
+              />
+            ) : (
+              historyRides.map(ride => (
+                <div key={ride.id} className="p-4 rounded-2xl bg-white border border-neutral-200 shadow-sm flex items-center justify-between">
+                  <div className="min-w-0 pr-3">
+                    <div className="flex items-center gap-1.5 font-bold text-xs sm:text-sm text-neutral-900 truncate">
+                      <span className="truncate">{ride.pickup}</span>
+                      <span className="text-neutral-400">→</span>
+                      <span className="truncate">{ride.dropoff}</span>
+                    </div>
+                    <p className="text-[11px] text-neutral-400 mt-1">{ride.date}</p>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <span className="text-sm font-black text-amber-600">₦{ride.fare}</span>
+                    <span className={`block text-[10px] font-bold uppercase tracking-wider mt-0.5 ${
+                      ride.status === 'completed'
+                        ? 'text-emerald-600'
+                        : ride.status === 'cancelled'
+                        ? 'text-red-500'
+                        : ride.status === 'expired'
+                        ? 'text-neutral-500'
+                        : 'text-amber-500'
+                    }`}>
+                      {ride.status}
+                    </span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        )}
       </div>
+
+      {/* Mandatory Cancellation Modal */}
+      <CancelRideModal
+        isOpen={showCancelModal}
+        onClose={() => setShowCancelModal(false)}
+        onConfirm={handleConfirmCancel}
+        role="rider"
+        isSubmitting={isCancelling}
+      />
     </div>
   )
 }

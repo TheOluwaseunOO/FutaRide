@@ -1,9 +1,11 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { type View } from '../App'
+import { useAuth } from '../context/AuthContext'
 
 interface Props {
-  setView: (v: View) => void
-  goAdmin: () => void
+  setView?: (v: View) => void
+  goAdmin?: () => void
 }
 
 const HUBS = [
@@ -33,8 +35,9 @@ const LIGHT_GRADIENT = [
   'radial-gradient(ellipse 35% 35% at 55% 45%, rgba(230,144,14,0.02) 0%, transparent 50%)',
 ].join(', ')
 
-
 export default function Landing({ setView, goAdmin }: Props) {
+  const navigate = useNavigate()
+  const { user, profile } = useAuth()
   const [tapCount, setTapCount] = useState(0)
   const [showAdminLink, setShowAdminLink] = useState(false)
 
@@ -44,8 +47,33 @@ export default function Landing({ setView, goAdmin }: Props) {
     if (next >= 7) { setShowAdminLink(true); setTapCount(0) }
   }
 
+  function handleGoRider() {
+    if (setView) setView('rider')
+    navigate('/rider')
+  }
+
+  function handleGoDriver() {
+    if (setView) setView('driver')
+    navigate('/driver')
+  }
+
+  function handleAuthRider() {
+    if (setView) setView('auth-rider')
+    navigate('/auth?role=rider')
+  }
+
+  function handleAuthDriver() {
+    if (setView) setView('auth-driver')
+    navigate('/auth?role=driver')
+  }
+
+  function handleAdmin() {
+    if (goAdmin) goAdmin()
+    else navigate('/admin-login')
+  }
+
   return (
-    <div className="min-h-screen flex flex-col" style={{ color: '#1a1a1a' }}>
+    <div className="min-h-screen flex flex-col font-sans" style={{ color: '#1a1a1a' }}>
 
       {/* ── Navbar ─────────────────────────────── */}
       <nav className="fixed top-0 inset-x-0 z-50 flex items-center justify-between px-4 md:px-14 h-14 md:h-16"
@@ -54,19 +82,19 @@ export default function Landing({ setView, goAdmin }: Props) {
           <img src="/src/assets/logo.png" alt="FutaRide" className="h-7 md:h-8 w-auto" />
         </button>
         <div className="flex items-center gap-2">
-          <button onClick={() => setView('driver')}
+          <button onClick={handleGoDriver}
             className="hidden sm:block text-sm font-medium px-4 py-2 rounded-lg transition-colors hover:bg-neutral-100"
             style={{ color: '#737373' }}>
             I'm a Driver
           </button>
           {showAdminLink && (
-            <button onClick={goAdmin}
+            <button onClick={handleAdmin}
               className="hidden sm:block text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
               style={{ color: '#737373', border: '1px solid #e8e8e8' }}>
               Admin
             </button>
           )}
-          <button onClick={() => setView('student')}
+          <button onClick={handleGoRider}
             className="text-sm font-semibold px-4 py-2 md:px-5 md:py-2.5 rounded-xl transition-all hover:opacity-90"
             style={{ background: '#E6900E', color: '#fff' }}>
             Book a Ride
@@ -80,8 +108,6 @@ export default function Landing({ setView, goAdmin }: Props) {
         <div className="absolute inset-0 pointer-events-none" style={{ background: LIGHT_GRADIENT }} />
 
         <div className="relative z-10 max-w-5xl mx-auto px-4 md:px-6 py-14 md:py-24 w-full">
-
-
           <h1 className="font-black leading-[1.05] mb-5 md:mb-6"
             style={{ fontFamily: 'Outfit, sans-serif', color: '#1a1a1a', fontSize: 'clamp(2.2rem, 8vw, 6rem)' }}>
             Smart, safe, and fast<br />
@@ -89,16 +115,16 @@ export default function Landing({ setView, goAdmin }: Props) {
           </h1>
 
           <p className="text-base md:text-xl leading-relaxed mb-8 md:mb-10 max-w-xl mx-auto" style={{ color: '#737373' }}>
-            FutaRide connects FUTA students with verified Keke drivers at fixed, transparent fares. No haggling, No waiting blind!
+            FutaRide connects the campus community with verified Keke drivers at fixed, transparent fares. No haggling, no waiting blind!
           </p>
 
           <div className="flex flex-wrap items-center justify-center gap-3 mb-10 md:mb-14">
-            <button onClick={() => setView('auth-student')}
+            <button onClick={handleAuthRider}
               className="px-7 py-3.5 rounded-xl font-bold text-base transition-all hover:opacity-90"
               style={{ background: '#E6900E', color: '#fff' }}>
               Request a Ride
             </button>
-            <button onClick={() => setView('auth-driver')}
+            <button onClick={handleAuthDriver}
               className="px-7 py-3.5 rounded-xl font-semibold text-base transition-all hover:bg-neutral-100"
               style={{ color: '#1a1a1a', border: '1px solid #e8e8e8' }}>
               I'm a Driver
@@ -115,7 +141,7 @@ export default function Landing({ setView, goAdmin }: Props) {
               style={{ height: '200px' }}
             />
             <div className="p-4 md:p-8">
-              <p className="text-xs font-mono uppercase tracking-widest mb-4" style={{ color: '#E6900E' }}>
+              <p className="text-xs font-medium uppercase tracking-widest mb-4" style={{ color: '#E6900E' }}>
                 Live — driver en route
               </p>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
@@ -134,7 +160,7 @@ export default function Landing({ setView, goAdmin }: Props) {
                 <div className="p-4 rounded-xl" style={{ background: '#f7f7f7' }}>
                   <p className="text-xs mb-1" style={{ color: '#737373' }}>Driver</p>
                   <p className="text-sm font-bold" style={{ color: '#1a1a1a' }}>Adewale K.</p>
-                  <p className="text-xs font-mono mt-0.5" style={{ color: '#a3a3a3' }}>AKR-442-KE</p>
+                  <p className="text-xs font-medium mt-0.5" style={{ color: '#a3a3a3' }}>AKR-442-KE</p>
                 </div>
               </div>
             </div>
@@ -166,7 +192,7 @@ export default function Landing({ setView, goAdmin }: Props) {
         <div className="absolute inset-0 pointer-events-none" style={{ background: LIGHT_GRADIENT }} />
         <div className="relative max-w-5xl mx-auto">
           <div className="mb-10 md:mb-16">
-            <p className="text-xs font-mono uppercase tracking-widest mb-4" style={{ color: '#E6900E' }}>Why FutaRide</p>
+            <p className="text-xs font-medium uppercase tracking-widest mb-4" style={{ color: '#E6900E' }}>Why FutaRide</p>
             <h2 className="text-3xl md:text-5xl font-black" style={{ fontFamily: 'Outfit, sans-serif' }}>
               Built for FUTA.<br />Designed for trust.
             </h2>
@@ -189,14 +215,14 @@ export default function Landing({ setView, goAdmin }: Props) {
       <section className="py-16 md:py-28 px-4 md:px-14" style={{ background: '#161616' }}>
         <div className="max-w-5xl mx-auto grid md:grid-cols-2 gap-10 md:gap-16 items-center">
           <div>
-            <p className="text-xs font-mono uppercase tracking-widest mb-4" style={{ color: '#E6900E' }}>How it works</p>
+            <p className="text-xs font-medium uppercase tracking-widest mb-4" style={{ color: '#E6900E' }}>How it works</p>
             <h2 className="text-3xl md:text-5xl font-black mb-5" style={{ fontFamily: 'Outfit, sans-serif', color: '#fff' }}>
               Three steps.<br />Zero friction.
             </h2>
             <p className="text-base mb-10" style={{ color: '#666', lineHeight: '1.7' }}>
               From request to pickup — the whole flow is designed to be simple, fast, and transparent.
             </p>
-            <button onClick={() => setView('student')}
+            <button onClick={handleGoRider}
               className="px-6 py-3 rounded-xl font-bold text-sm hover:opacity-90"
               style={{ background: '#E6900E', color: '#fff' }}>
               Try it now
@@ -221,22 +247,22 @@ export default function Landing({ setView, goAdmin }: Props) {
         <div className="absolute inset-0 pointer-events-none" style={{ background: LIGHT_GRADIENT }} />
         <div className="relative max-w-5xl mx-auto grid md:grid-cols-2 gap-10 md:gap-20 items-center">
           <div>
-            <p className="text-xs font-mono uppercase tracking-widest mb-4" style={{ color: '#E6900E' }}>Fixed & curated</p>
+            <p className="text-xs font-medium uppercase tracking-widest mb-4" style={{ color: '#E6900E' }}>Fixed & curated</p>
             <h2 className="text-3xl md:text-4xl font-black mb-5" style={{ fontFamily: 'Outfit, sans-serif' }}>
               8 hubs.<br />Zero guesswork.
             </h2>
             <p className="text-base mb-10" style={{ color: '#737373', lineHeight: '1.7' }}>
-              No GPS. Every pickup and drop-off is a named, recognized landmark. Drivers always know where to go.
+              No GPS required. Every pickup and drop-off is a named, recognized landmark. Drivers always know where to go.
             </p>
-            <button onClick={() => setView('student')}
+            <button onClick={handleGoRider}
               className="px-5 py-3 rounded-xl font-semibold text-sm hover:opacity-90"
               style={{ background: '#1a1a1a', color: '#fff' }}>
-              Book at a hub
+              Get Started Now
             </button>
           </div>
           <div className="grid grid-cols-2 gap-px" style={{ background: '#e8e8e8' }}>
             {HUBS.map(hub => (
-              <div key={hub} className="px-4 py-3 text-xs md:text-sm font-medium leading-snug" style={{ background: '#fff', color: '#1a1a1a' }}>
+              <div key={hub} className="px-4 py-3 text-xs md:text-sm font-mono leading-snug" style={{ background: '#fff', color: '#1a1a1a' }}>
                 {hub}
               </div>
             ))}
@@ -249,25 +275,25 @@ export default function Landing({ setView, goAdmin }: Props) {
         <div className="absolute inset-0 pointer-events-none" style={{ background: LIGHT_GRADIENT }} />
         <div className="relative max-w-5xl mx-auto">
           <div className="mb-10 md:mb-16 text-center">
-            <p className="text-xs font-mono uppercase tracking-widest mb-4" style={{ color: '#E6900E' }}>Two portals</p>
+            <p className="text-xs font-medium uppercase tracking-widest mb-4" style={{ color: '#E6900E' }}>Two portals</p>
             <h2 className="text-3xl md:text-4xl font-black" style={{ fontFamily: 'Outfit, sans-serif' }}>
               Built for every role on campus.
             </h2>
           </div>
           <div className="grid md:grid-cols-2 gap-6">
 
-            {/* Student */}
+            {/* Rider */}
             <div className="rounded-2xl overflow-hidden bg-white" style={{ border: '1px solid #e8e8e8' }}>
               <div className="h-52 overflow-hidden relative">
                 <img
                   src="https://images.unsplash.com/photo-1694175271713-a6e2cc378980?w=700&h=300&fit=crop&auto=format"
-                  alt="FUTA student"
+                  alt="Campus Rider"
                   className="w-full h-full object-cover"
                   style={{ opacity: 0.85 }}
                 />
                 <div className="absolute inset-0" style={{ background: 'linear-gradient(to top, rgba(22,22,22,0.65) 0%, transparent 65%)' }} />
                 <p className="absolute bottom-5 left-6 text-2xl font-black text-white" style={{ fontFamily: 'Outfit, sans-serif' }}>
-                  Student
+                  Rider
                 </p>
               </div>
               <div className="p-7">
@@ -281,10 +307,10 @@ export default function Landing({ setView, goAdmin }: Props) {
                     </div>
                   ))}
                 </div>
-                <button onClick={() => setView('student')}
+                <button onClick={handleAuthRider}
                   className="w-full py-3 rounded-xl font-bold text-sm hover:opacity-90"
                   style={{ background: '#E6900E', color: '#fff' }}>
-                 SignUp as a Rider
+                  Sign Up as a Rider
                 </button>
               </div>
             </div>
@@ -320,10 +346,10 @@ export default function Landing({ setView, goAdmin }: Props) {
                     </div>
                   ))}
                 </div>
-                <button onClick={() => setView('driver')}
+                <button onClick={handleAuthDriver}
                   className="w-full py-3 rounded-xl font-bold text-sm hover:opacity-90"
                   style={{ background: '#1a1a1a', color: '#fff' }}>
-                  SignUp as a Driver
+                  Sign Up as a Driver
                 </button>
               </div>
             </div>
@@ -333,44 +359,41 @@ export default function Landing({ setView, goAdmin }: Props) {
 
       {/* ── CTA ────────────────────────────────── */}
       <section className="relative overflow-hidden" style={{ background: '#0a0a0a', minHeight: '480px' }}>
-        {/* Photo card strip — full bleed background */}
         <div className="absolute inset-0 flex gap-2 px-2 py-2" style={{ pointerEvents: 'none' }}>
           {[
-            { src: 'https://images.unsplash.com/photo-1620829813573-7c9e1877706f?w=400&h=600&fit=crop&auto=format', label: 'Student', mobileHide: true },
+            { src: 'https://images.unsplash.com/photo-1620829813573-7c9e1877706f?w=400&h=600&fit=crop&auto=format', label: 'Rider', mobileHide: true },
             { src: 'https://images.unsplash.com/photo-1654762550505-7c58277e0fac?w=400&h=600&fit=crop&auto=format', label: 'Campus Ride', mobileHide: false },
             { src: 'https://images.unsplash.com/photo-1572816225927-d08fb138f2b2?w=400&h=600&fit=crop&auto=format', label: 'Keke', mobileHide: false },
             { src: 'https://images.unsplash.com/photo-1529171918672-ba6d0733a56c?w=400&h=600&fit=crop&auto=format', label: 'Driver', mobileHide: false },
-            { src: 'https://images.unsplash.com/photo-1686213011624-8578b598ef0f?w=400&h=600&fit=crop&auto=format', label: 'Graduate', mobileHide: true },
+            { src: 'https://images.unsplash.com/photo-1686213011624-8578b598ef0f?w=400&h=600&fit=crop&auto=format', label: 'Community', mobileHide: true },
           ].map(({ src, label, mobileHide }) => (
             <div key={label} className={`relative flex-1 rounded-xl overflow-hidden${mobileHide ? ' hidden md:block' : ''}`}>
               <img src={src} alt={label} className="w-full h-full object-cover" style={{ opacity: 0.7 }} />
               <div className="absolute inset-0" style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.55) 0%, transparent 50%)' }} />
-              <span className="absolute bottom-3 left-4 text-xs font-medium text-white" style={{ opacity: 0.7 }}>{label}</span>
+              <span className="absolute bottom-3 left-4 text-xs font-mono text-white" style={{ opacity: 0.7 }}>{label}</span>
             </div>
           ))}
         </div>
 
-        {/* Global dark overlay for text readability */}
         <div className="absolute inset-0" style={{
           background: 'linear-gradient(to bottom, rgba(0,0,0,0.45) 0%, rgba(0,0,0,0.55) 100%)',
           pointerEvents: 'none'
         }} />
 
-        {/* Content */}
         <div className="relative z-10 flex flex-col items-center justify-center text-center px-4 md:px-6 py-20 md:py-28">
           <h2 className="text-3xl md:text-5xl font-black mb-4 md:mb-5 text-white" style={{ fontFamily: 'Outfit, sans-serif' }}>
             No more roadside haggling.
           </h2>
           <p className="text-base mb-10 max-w-md" style={{ color: 'rgba(255,255,255,0.7)', lineHeight: '1.7' }}>
-            Free for FUTA students. Pay your locked fare in cash on arrival.
+            Open to the entire FUTA campus community. Pay your locked fare on arrival.
           </p>
           <div className="flex flex-wrap gap-3 justify-center">
-            <button onClick={() => setView('student')}
+            <button onClick={handleGoRider}
               className="px-7 py-3.5 rounded-xl font-bold text-sm hover:opacity-90 transition-all"
               style={{ background: '#E6900E', color: '#fff' }}>
               Book a Ride
             </button>
-            <button onClick={() => setView('driver')}
+            <button onClick={handleGoDriver}
               className="px-7 py-3.5 rounded-xl font-semibold text-sm transition-all hover:bg-white/10"
               style={{ color: '#fff', border: '1px solid rgba(255,255,255,0.3)' }}>
               I'm a Driver
@@ -383,7 +406,6 @@ export default function Landing({ setView, goAdmin }: Props) {
       <footer style={{ background: '#0f0f0f' }}>
         <div className="max-w-5xl mx-auto px-4 md:px-14 pt-12 pb-8 md:pt-16 md:pb-12 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-8 md:gap-10">
 
-          {/* Logo col */}
           <div className="col-span-2 md:col-span-4 lg:col-span-1">
             <button onClick={handleLogoTap} className="select-none mb-4 block">
               <img src="/src/assets/logo-white.png" alt="FutaRide" className="h-7 w-auto" />
@@ -393,13 +415,12 @@ export default function Landing({ setView, goAdmin }: Props) {
             </p>
           </div>
 
-          {/* Navigation */}
           <div>
             <p className="text-xs font-bold uppercase tracking-widest mb-5" style={{ color: '#fff' }}>Navigation</p>
             <ul className="space-y-3">
               {[
-                { label: 'Book a Ride', action: () => setView('student') },
-                { label: 'Driver Portal', action: () => setView('driver') },
+                { label: 'Book a Ride', action: handleGoRider },
+                { label: 'Driver Portal', action: handleGoDriver },
               ].map(l => (
                 <li key={l.label}>
                   <button onClick={l.action} className="text-sm transition-colors hover:text-white" style={{ color: '#666' }}>
@@ -410,7 +431,6 @@ export default function Landing({ setView, goAdmin }: Props) {
             </ul>
           </div>
 
-          {/* Platform */}
           <div>
             <p className="text-xs font-bold uppercase tracking-widest mb-5" style={{ color: '#fff' }}>Platform</p>
             <ul className="space-y-3">
@@ -422,7 +442,6 @@ export default function Landing({ setView, goAdmin }: Props) {
             </ul>
           </div>
 
-          {/* Legal */}
           <div>
             <p className="text-xs font-bold uppercase tracking-widest mb-5" style={{ color: '#fff' }}>Legal</p>
             <ul className="space-y-3">
@@ -434,7 +453,6 @@ export default function Landing({ setView, goAdmin }: Props) {
             </ul>
           </div>
 
-          {/* Contact */}
           <div>
             <p className="text-xs font-bold uppercase tracking-widest mb-5" style={{ color: '#fff' }}>Contact</p>
             <ul className="space-y-3">
@@ -448,10 +466,9 @@ export default function Landing({ setView, goAdmin }: Props) {
           </div>
         </div>
 
-        {/* Bottom bar */}
         <div className="max-w-5xl mx-auto px-6 md:px-14 py-5" style={{ borderTop: '1px solid #1f1f1f' }}>
           <p className="text-xs" style={{ color: '#444' }}>
-            © 2025 FutaRide. All rights reserved.
+            © 2026 FutaRide. All rights reserved.
           </p>
         </div>
       </footer>

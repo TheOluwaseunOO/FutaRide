@@ -1,51 +1,151 @@
 import { useState } from 'react'
+import { Routes, Route, Navigate, useNavigate } from 'react-router-dom'
 import Landing from './pages/Landing'
 import AuthPage from './pages/AuthPage'
 import StudentDashboard from './pages/StudentDashboard'
 import DriverDashboard from './pages/DriverDashboard'
 import AdminDashboard from './pages/AdminDashboard'
 import AdminLogin from './pages/AdminLogin'
+import RoleGuard, { PublicOnlyRoute } from './components/RoleGuard'
 
-export type View = 'landing' | 'auth-student' | 'auth-driver' | 'student' | 'driver' | 'admin-login' | 'admin'
+export type View =
+  | 'landing'
+  | 'auth-rider'
+  | 'auth-student'
+  | 'auth-driver'
+  | 'rider'
+  | 'student'
+  | 'driver'
+  | 'admin-login'
+  | 'admin'
 
 export default function App() {
-  const [view, setView] = useState<View>('landing')
+  const navigate = useNavigate()
   const [adminAuthed, setAdminAuthed] = useState(false)
-  const [userAuthed, setUserAuthed] = useState(false)
 
-  function goPortal(role: 'student' | 'driver') {
-    if (userAuthed) setView(role)
-    else setView(role === 'student' ? 'auth-student' : 'auth-driver')
+  function handleSetView(v: View) {
+    if (v === 'landing') navigate('/')
+    else if (v === 'auth-rider' || v === 'auth-student') navigate('/auth?role=rider')
+    else if (v === 'auth-driver') navigate('/auth?role=driver')
+    else if (v === 'rider' || v === 'student') navigate('/rider')
+    else if (v === 'driver') navigate('/driver')
+    else if (v === 'admin-login') navigate('/admin-login')
+    else if (v === 'admin') navigate('/admin')
   }
 
-  function goAdmin() {
-    if (adminAuthed) setView('admin')
-    else setView('admin-login')
-  }
-
-  function onUserAuth(role: 'student' | 'driver') {
-    setUserAuthed(true)
-    setView(role)
-  }
-
-  function onAdminAuth() {
+  function handleAdminAuth() {
     setAdminAuthed(true)
-    setView('admin')
+    navigate('/admin')
+  }
+
+  function handleAdminSignOut() {
+    setAdminAuthed(false)
+    navigate('/')
   }
 
   return (
     <div className="min-h-screen" style={{ background: '#fff', fontFamily: 'Inter, sans-serif' }}>
-      {view === 'landing'      && <Landing setView={(v) => {
-        if (v === 'student') goPortal('student')
-        else if (v === 'driver') goPortal('driver')
-        else setView(v as View)
-      }} goAdmin={goAdmin} />}
-      {view === 'auth-student' && <AuthPage setView={setView as any} onAuth={onUserAuth} intent="student" />}
-      {view === 'auth-driver'  && <AuthPage setView={setView as any} onAuth={onUserAuth} intent="driver" />}
-      {view === 'student'      && userAuthed && <StudentDashboard setView={setView as any} />}
-      {view === 'driver'       && userAuthed && <DriverDashboard setView={setView as any} />}
-      {view === 'admin-login'  && <AdminLogin onAuth={onAdminAuth} setView={setView as any} />}
-      {view === 'admin'        && adminAuthed && <AdminDashboard setView={setView as any} />}
+      <Routes>
+        {/* Public Landing */}
+        <Route
+          path="/"
+          element={
+            <Landing
+              setView={handleSetView}
+              goAdmin={() => navigate(adminAuthed ? '/admin' : '/admin-login')}
+            />
+          }
+        />
+
+        {/* Public-only Auth Pages (redirects to appropriate portal if already authenticated) */}
+        <Route
+          path="/auth"
+          element={
+            <PublicOnlyRoute>
+              <AuthPage setView={handleSetView} />
+            </PublicOnlyRoute>
+          }
+        />
+        <Route
+          path="/auth-rider"
+          element={
+            <PublicOnlyRoute>
+              <AuthPage setView={handleSetView} intent="rider" />
+            </PublicOnlyRoute>
+          }
+        />
+        <Route
+          path="/auth-student"
+          element={<Navigate to="/auth-rider" replace />}
+        />
+        <Route
+          path="/auth-driver"
+          element={
+            <PublicOnlyRoute>
+              <AuthPage setView={handleSetView} intent="driver" />
+            </PublicOnlyRoute>
+          }
+        />
+        <Route
+          path="/login"
+          element={
+            <PublicOnlyRoute>
+              <AuthPage setView={handleSetView} defaultMode="login" />
+            </PublicOnlyRoute>
+          }
+        />
+        <Route
+          path="/signup"
+          element={
+            <PublicOnlyRoute>
+              <AuthPage setView={handleSetView} defaultMode="signup" />
+            </PublicOnlyRoute>
+          }
+        />
+
+        {/* Protected Rider Portal - permits both 'rider' and legacy 'student' */}
+        <Route
+          path="/rider"
+          element={
+            <RoleGuard allowedRoles={['rider', 'student']}>
+              <StudentDashboard setView={handleSetView} />
+            </RoleGuard>
+          }
+        />
+        <Route
+          path="/student"
+          element={<Navigate to="/rider" replace />}
+        />
+
+        {/* Protected Driver Portal - strictly role guarded */}
+        <Route
+          path="/driver"
+          element={
+            <RoleGuard allowedRoles={['driver']}>
+              <DriverDashboard setView={handleSetView} />
+            </RoleGuard>
+          }
+        />
+
+        {/* Admin Console */}
+        <Route
+          path="/admin-login"
+          element={<AdminLogin onAuth={handleAdminAuth} setView={handleSetView} />}
+        />
+        <Route
+          path="/admin"
+          element={
+            adminAuthed ? (
+              <AdminDashboard setView={handleSetView} onSignOut={handleAdminSignOut} />
+            ) : (
+              <Navigate to="/admin-login" replace />
+            )
+          }
+        />
+
+        {/* Catch-all redirect to Home */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
     </div>
   )
 }
