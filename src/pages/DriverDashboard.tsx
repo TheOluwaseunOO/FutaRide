@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { type View } from '../App'
 import { useAuth } from '../context/AuthContext'
@@ -33,6 +33,15 @@ interface CompletedRide {
   time: string
 }
 
+interface DriverNotification {
+  id: string
+  title: string
+  message: string
+  type: 'info' | 'success' | 'warning' | 'error'
+  time: string
+  unread: boolean
+}
+
 type Phase = 'arriving' | 'in_progress' | 'completed' | null
 interface Props { setView?: (v: View) => void }
 
@@ -61,6 +70,11 @@ export default function DriverDashboard({ setView }: Props) {
   const [claimError, setClaimError] = useState<string>('')
   const [driverQuoteInputs, setDriverQuoteInputs] = useState<Record<string, string>>({})
 
+  // Notifications State
+  const [showNotifications, setShowNotifications] = useState(false)
+  const [notifications, setNotifications] = useState<DriverNotification[]>([])
+  const notifRef = useRef<HTMLDivElement>(null)
+
   // Cancellation Modal State
   const [showCancelModal, setShowCancelModal] = useState(false)
   const [isCancelling, setIsCancelling] = useState(false)
@@ -68,6 +82,62 @@ export default function DriverDashboard({ setView }: Props) {
   const earnings = completedRides.reduce((s, r) => s + r.fare, 0)
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
+
+  // Click outside to dismiss notification dropdown
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
+        setShowNotifications(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  // Manage notifications list based on verification changes
+  useEffect(() => {
+    const list: DriverNotification[] = [
+      {
+        id: 'welcome',
+        title: 'Welcome onboard',
+        message: 'Your driver account has been activated for campus dispatch.',
+        type: 'info',
+        time: 'Active',
+        unread: false,
+      },
+    ]
+
+    if (verificationStatus === 'verified') {
+      list.unshift({
+        id: 'approved',
+        title: 'Your account has been approved',
+        message: 'Administrative verification is active. You can now accept rides freely.',
+        type: 'success',
+        time: 'Live',
+        unread: false,
+      })
+    } else if (verificationStatus === 'suspended') {
+      list.unshift({
+        id: 'suspended',
+        title: 'Your account has been suspended',
+        message: 'Dispatch and ride acceptance have been restricted by campus administration.',
+        type: 'error',
+        time: 'Urgent',
+        unread: true,
+      })
+    } else if (verificationStatus === 'pending') {
+      list.unshift({
+        id: 'pending',
+        title: 'Verification In Progress',
+        message: 'Your driver account is undergoing automatic review.',
+        type: 'warning',
+        time: 'Pending',
+        unread: true,
+      })
+    }
+
+    setNotifications(list)
+  }, [verificationStatus])
 
   // Helper: Map database row to standard UI object
   async function transformDbRide(rideRow: any): Promise<QueueRide> {
@@ -474,7 +544,8 @@ export default function DriverDashboard({ setView }: Props) {
           <img src="/logo.png" alt="FutaRide" className="h-6 sm:h-7 w-auto" />
         </button>
 
-        <div className="flex items-center gap-2.5 sm:gap-4">
+        <div className="flex items-center gap-2 sm:gap-3.5">
+          {/* Online Toggle */}
           <div className="flex items-center gap-2">
             <span
               className="text-[11px] sm:text-xs font-bold hidden sm:block"
@@ -496,6 +567,56 @@ export default function DriverDashboard({ setView }: Props) {
                 style={{ left: online && verificationStatus !== 'suspended' ? '24px' : '4px' }}
               />
             </button>
+          </div>
+
+          {/* Notifications Dropdown */}
+          <div className="relative" ref={notifRef}>
+            <button
+              onClick={() => setShowNotifications(prev => !prev)}
+              className="relative p-2 rounded-xl text-neutral-600 hover:bg-neutral-100 transition-colors"
+              title="Notifications"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+              </svg>
+              {notifications.some(n => n.unread) && (
+                <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+              )}
+            </button>
+
+            {showNotifications && (
+              <div className="absolute right-0 mt-2 w-80 sm:w-88 bg-white rounded-2xl shadow-xl border border-neutral-200 py-3 z-50">
+                <div className="px-4 pb-2 border-b border-neutral-100 flex items-center justify-between">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-neutral-500">Notifications</h4>
+                  <span className="text-[11px] font-semibold text-neutral-400">{notifications.length} alerts</span>
+                </div>
+
+                <div className="max-h-72 overflow-y-auto divide-y divide-neutral-100">
+                  {notifications.map((n) => (
+                    <div key={n.id} className="p-3.5 hover:bg-neutral-50 transition-colors flex items-start gap-3">
+                      <span
+                        className={`w-2.5 h-2.5 rounded-full mt-1 flex-shrink-0 ${
+                          n.type === 'error'
+                            ? 'bg-red-500'
+                            : n.type === 'success'
+                            ? 'bg-emerald-500'
+                            : n.type === 'warning'
+                            ? 'bg-amber-500'
+                            : 'bg-blue-500'
+                        }`}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-1">
+                          <p className="text-xs font-bold text-neutral-800">{n.title}</p>
+                          <span className="text-[10px] text-neutral-400">{n.time}</span>
+                        </div>
+                        <p className="text-[11px] text-neutral-600 mt-0.5 leading-snug">{n.message}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="hidden sm:block text-right">
@@ -701,7 +822,6 @@ export default function DriverDashboard({ setView }: Props) {
           <div className="space-y-3">
             {pendingQueue.length === 0 ? (
               <div className="bg-white rounded-2xl p-8 sm:p-10 text-center border border-neutral-200 shadow-sm flex flex-col items-center justify-center">
-                {/* Radar Pulse Animation */}
                 <div className="relative flex items-center justify-center w-16 h-16 mb-4">
                   <span className="absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-20 animate-ping" />
                   <div className="relative w-14 h-14 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center text-2xl shadow-inner">

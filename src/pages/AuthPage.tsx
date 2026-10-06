@@ -11,6 +11,22 @@ interface Props {
   defaultMode?: 'login' | 'signup'
 }
 
+interface PasswordRule {
+  label: string
+  valid: boolean
+}
+
+function checkPasswordStrength(pw: string): { isValid: boolean; rules: PasswordRule[] } {
+  const rules = [
+    { label: 'At least 8 characters long', valid: pw.length >= 8 },
+    { label: 'At least one uppercase letter (A-Z)', valid: /[A-Z]/.test(pw) },
+    { label: 'At least one lowercase letter (a-z)', valid: /[a-z]/.test(pw) },
+    { label: 'At least one number (0-9)', valid: /[0-9]/.test(pw) },
+    { label: 'At least one special character (!@#$%^&*)', valid: /[^A-Za-z0-9]/.test(pw) },
+  ]
+  return { isValid: rules.every(r => r.valid), rules }
+}
+
 export default function AuthPage({ setView, onAuth, intent = 'rider', defaultMode = 'login' }: Props) {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
@@ -27,6 +43,7 @@ export default function AuthPage({ setView, onAuth, intent = 'rider', defaultMod
   const [mode, setMode] = useState<'login' | 'signup'>(initialMode)
   const [role, setRole] = useState<'rider' | 'driver'>(initialRole)
   const [loading, setLoading] = useState(false)
+  const [passwordTouched, setPasswordTouched] = useState(false)
 
   const [form, setForm] = useState({
     name: '',
@@ -36,6 +53,8 @@ export default function AuthPage({ setView, onAuth, intent = 'rider', defaultMod
     password: '',
   })
   const [error, setError] = useState('')
+
+  const { isValid: isPasswordValid, rules: passwordRules } = checkPasswordStrength(form.password)
 
   function set(k: string, v: string) {
     setForm(f => ({ ...f, [k]: v }))
@@ -48,9 +67,15 @@ export default function AuthPage({ setView, onAuth, intent = 'rider', defaultMod
       setError('Please fill in all required fields.')
       return
     }
-    if (mode === 'signup' && !form.name.trim()) {
-      setError('Full name is required.')
-      return
+    if (mode === 'signup') {
+      if (!form.name.trim()) {
+        setError('Full name is required.')
+        return
+      }
+      if (!isPasswordValid) {
+        setError('Please meet all password security requirements before signing up.')
+        return
+      }
     }
 
     setLoading(true)
@@ -73,7 +98,6 @@ export default function AuthPage({ setView, onAuth, intent = 'rider', defaultMod
         if (setView) setView(resolvedRole as any)
         navigate(resolvedRole === 'driver' ? '/driver' : '/rider')
       } else {
-        // Unified login: authenticate with credentials first
         const data = await signIn({
           email: form.email.trim(),
           password: form.password,
@@ -83,7 +107,6 @@ export default function AuthPage({ setView, onAuth, intent = 'rider', defaultMod
         let resolvedRole: 'rider' | 'driver' = 'rider'
 
         if (userId) {
-          // Check if registered as a driver in driver_profiles
           const { data: driverRow } = await supabase
             .from('driver_profiles')
             .select('id')
@@ -113,7 +136,6 @@ export default function AuthPage({ setView, onAuth, intent = 'rider', defaultMod
 
   return (
     <div className="min-h-screen flex flex-col font-sans" style={{ background: '#f7f7f7' }}>
-
       {/* Nav */}
       <div className="flex items-center justify-between px-6 md:px-12 h-16 bg-white" style={{ borderBottom: '1px solid #e8e8e8' }}>
         <button onClick={() => { if (setView) setView('landing'); navigate('/'); }}>
@@ -127,7 +149,6 @@ export default function AuthPage({ setView, onAuth, intent = 'rider', defaultMod
 
       <div className="flex-1 flex items-start md:items-center justify-center px-4 py-8 md:py-12">
         <div className="w-full max-w-sm">
-
           <div className="mb-8">
             <h1 className="text-3xl font-black mb-1" style={{ fontFamily: 'Outfit, sans-serif', color: '#1a1a1a' }}>
               {mode === 'login' ? 'Welcome back.' : 'Create account.'}
@@ -153,7 +174,6 @@ export default function AuthPage({ setView, onAuth, intent = 'rider', defaultMod
           )}
 
           <form onSubmit={handleSubmit} className="bg-white rounded-2xl p-7 space-y-4" style={{ border: '1px solid #e8e8e8' }}>
-
             {mode === 'signup' && (
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wide mb-1.5" style={{ color: '#737373' }}>
@@ -224,11 +244,32 @@ export default function AuthPage({ setView, onAuth, intent = 'rider', defaultMod
               <input
                 type="password"
                 value={form.password}
-                onChange={e => set('password', e.target.value)}
+                onChange={e => {
+                  set('password', e.target.value)
+                  if (!passwordTouched) setPasswordTouched(true)
+                }}
                 placeholder="••••••••"
                 className="w-full px-4 py-3 rounded-xl text-sm focus:outline-none"
                 style={{ background: '#f7f7f7', border: `1px solid ${error ? '#fca5a5' : '#e8e8e8'}`, color: '#1a1a1a' }}
               />
+
+              {mode === 'signup' && passwordTouched && (
+                <div className="mt-3 p-3 rounded-xl bg-neutral-50 border border-neutral-200 text-xs space-y-1.5">
+                  <p className="font-semibold text-neutral-700 mb-1">Password Requirements:</p>
+                  {passwordRules.map((rule, idx) => (
+                    <div key={idx} className="flex items-center gap-2">
+                      <span className={`w-3.5 h-3.5 rounded-full flex items-center justify-center text-[9px] font-bold ${
+                        rule.valid ? 'bg-emerald-500 text-white' : 'bg-neutral-300 text-neutral-600'
+                      }`}>
+                        {rule.valid ? '✓' : '•'}
+                      </span>
+                      <span className={rule.valid ? 'text-emerald-700 font-medium' : 'text-neutral-500'}>
+                        {rule.label}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {error && <p className="text-xs" style={{ color: '#dc2626' }}>{error}</p>}
