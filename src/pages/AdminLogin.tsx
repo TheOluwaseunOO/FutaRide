@@ -69,7 +69,7 @@ export default function AdminLogin({ onAuth, setView }: Props) {
       <div className="w-full max-w-sm">
 
         <button onClick={handleGoHome} className="block mb-10 text-center w-full">
-          <img src="/src/assets/logo.png" alt="FutaRide" className="h-8 w-auto" />
+          <img src="/logo.png" alt="FutaRide" className="h-8 w-auto" />
         </button>
 
         <div className="bg-white rounded-2xl p-8" style={{ border: '1px solid #e8e8e8' }}>

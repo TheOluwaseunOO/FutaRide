@@ -570,7 +570,7 @@ export default function StudentDashboard({ setView }: Props) {
           onClick={() => { if (setView) setView('landing'); navigate('/') }}
           className="active:scale-95 transition-transform"
         >
-          <img src="/src/assets/logo.png" alt="FutaRide" className="h-6 sm:h-7 w-auto" />
+          <img src="/logo.png" alt="FutaRide" className="h-6 sm:h-7 w-auto" />
         </button>
 
         <div className="flex items-center gap-2 sm:gap-3">

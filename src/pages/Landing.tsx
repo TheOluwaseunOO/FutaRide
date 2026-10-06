@@ -11,7 +11,7 @@ interface Props {
 const HUBS = [
   'FUTA North Gate', 'FUTA South Gate', 'Obanla Campus Center',
   'School of Engineering (SEET)', 'Obakekere Junction',
-  'Aule Junction Hub', 'FUTA Junction (Ilesha Rd)', 'South Gate / Titilayo',
+  'Aule Junction Hub', 'FUTA Junction', 'South Gate',
 ]
 
 const FEATURES = [
@@ -79,7 +79,7 @@ export default function Landing({ setView, goAdmin }: Props) {
       <nav className="fixed top-0 inset-x-0 z-50 flex items-center justify-between px-4 md:px-14 h-14 md:h-16"
         style={{ background: 'rgba(255,255,255,0.96)', backdropFilter: 'blur(20px)', borderBottom: '1px solid #e8e8e8' }}>
         <button onClick={handleLogoTap} className="select-none">
-          <img src="/logo.png" alt="FutaRide" className="h-7 md:h-8 w-auto" />
+          <img src="logo.png" alt="FutaRide" className="h-7 md:h-8 w-auto" />
         </button>
         <div className="flex items-center gap-2">
           <button onClick={handleGoDriver}

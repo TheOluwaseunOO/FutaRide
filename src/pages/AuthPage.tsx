@@ -117,7 +117,7 @@ export default function AuthPage({ setView, onAuth, intent = 'rider', defaultMod
       {/* Nav */}
       <div className="flex items-center justify-between px-6 md:px-12 h-16 bg-white" style={{ borderBottom: '1px solid #e8e8e8' }}>
         <button onClick={() => { if (setView) setView('landing'); navigate('/'); }}>
-          <img src="/src/assets/logo.png" alt="FutaRide" className="h-8 w-auto" />
+          <img src="/logo.png" alt="FutaRide" className="h-8 w-auto" />
         </button>
         <button onClick={() => { setMode(m => m === 'login' ? 'signup' : 'login'); setError('') }}
           className="text-sm" style={{ color: '#737373' }}>

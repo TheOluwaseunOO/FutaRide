@@ -346,7 +346,7 @@ export default function AdminDashboard() {
       {/* Top Navigation */}
       <header className="sticky top-0 z-40 bg-white border-b border-neutral-200 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <img src="/src/assets/logo.png" alt="FutaRide" className="h-7 w-auto" />
+          <img src="/logo.png" alt="FutaRide" className="h-7 w-auto" />
           <span className="text-xs font-mono font-bold bg-neutral-900 text-white px-2 py-0.5 rounded">
             Admin Portal
           </span>
