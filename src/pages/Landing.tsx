@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { type View } from '../App'
 import { useAuth } from '../context/AuthContext'
+import logoDark from '../assets/logo.png'
+import logoWhite from '../assets/logo-white.png'
 
 interface Props {
   setView?: (v: View) => void
@@ -31,7 +33,7 @@ const LIGHT_GRADIENT = [
   'radial-gradient(ellipse 55% 45% at 15% 25%, rgba(230,144,14,0.05) 0%, transparent 65%)',
   'radial-gradient(ellipse 50% 55% at 85% 15%, rgba(245,196,30,0.04) 0%, transparent 60%)',
   'radial-gradient(ellipse 60% 40% at 70% 85%, rgba(230,144,14,0.035) 0%, transparent 60%)',
-  'radial-gradient(ellipse 45% 50% at 30% 80%, rgba(245,196,30,0.025) 0%, transparent 55%)',
+  'radial-gradient(ellipse 45% 50% at 30% 80%, rgba(245,196,30,0.025) 0%, transparent 50%)',
   'radial-gradient(ellipse 35% 35% at 55% 45%, rgba(230,144,14,0.02) 0%, transparent 50%)',
 ].join(', ')
 
@@ -79,7 +81,7 @@ export default function Landing({ setView, goAdmin }: Props) {
       <nav className="fixed top-0 inset-x-0 z-50 flex items-center justify-between px-4 md:px-14 h-14 md:h-16"
         style={{ background: 'rgba(255,255,255,0.96)', backdropFilter: 'blur(20px)', borderBottom: '1px solid #e8e8e8' }}>
         <button onClick={handleLogoTap} className="select-none">
-          <img src="/src/assets/logo.png" alt="FutaRide" className="h-7 md:h-8 w-auto" />
+          <img src={logoDark} alt="FutaRide" className="h-7 md:h-8 w-auto" />
         </button>
         <div className="flex items-center gap-2">
           <button onClick={handleGoDriver}
@@ -136,7 +138,7 @@ export default function Landing({ setView, goAdmin }: Props) {
             style={{ background: '#fff', border: '1px solid #e8e8e8' }}>
             <img
               src="https://images.unsplash.com/photo-1572816225927-d08fb138f2b2?w=1200&h=320&fit=crop&auto=format"
-              alt="Nigerian street with Keke vehicles"
+              alt="Campus transit"
               className="w-full object-cover"
               style={{ height: '200px' }}
             />
@@ -408,7 +410,7 @@ export default function Landing({ setView, goAdmin }: Props) {
 
           <div className="col-span-2 md:col-span-4 lg:col-span-1">
             <button onClick={handleLogoTap} className="select-none mb-4 block">
-              <img src="/src/assets/logo-white.png" alt="FutaRide" className="h-7 w-auto" />
+              <img src={logoWhite} alt="FutaRide" className="h-7 w-auto" />
             </button>
             <p className="text-xs leading-relaxed" style={{ color: '#666', maxWidth: '180px' }}>
               Campus Keke dispatch for Federal University of Technology, Akure.
