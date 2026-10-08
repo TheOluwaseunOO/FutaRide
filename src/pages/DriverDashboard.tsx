@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { type View } from '../App'
 import { useAuth } from '../context/AuthContext'
 import { supabase } from '../lib/supabase'
+import { subscribeDriverToPush } from '../lib/pushNotifications'
 import CancelRideModal from '../components/CancelRideModal'
 import NetworkBanner from '../components/NetworkBanner'
 import EmptyState from '../components/EmptyState'
@@ -93,6 +94,13 @@ export default function DriverDashboard({ setView }: Props) {
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
+
+  // Auto-subscribe if driver initializes in online state
+  useEffect(() => {
+    if (online && user?.id && verificationStatus !== 'suspended') {
+      subscribeDriverToPush(user.id)
+    }
+  }, [online, user?.id, verificationStatus])
 
   // Manage notifications list based on verification changes
   useEffect(() => {
@@ -413,7 +421,13 @@ export default function DriverDashboard({ setView }: Props) {
       return
     }
     setClaimError('')
-    setOnline((prev) => !prev)
+    setOnline((prev) => {
+      const next = !prev
+      if (next && user?.id) {
+        subscribeDriverToPush(user.id)
+      }
+      return next
+    })
   }
 
   async function handleSendQuote(rideId: string) {
@@ -569,7 +583,7 @@ export default function DriverDashboard({ setView }: Props) {
             </button>
           </div>
 
-          {/* Notifications Dropdown */}
+          {/* Notifications Dropdown Container */}
           <div className="relative" ref={notifRef}>
             <button
               onClick={() => setShowNotifications(prev => !prev)}
@@ -585,10 +599,12 @@ export default function DriverDashboard({ setView }: Props) {
             </button>
 
             {showNotifications && (
-              <div className="absolute right-0 mt-2 w-80 sm:w-88 bg-white rounded-2xl shadow-xl border border-neutral-200 py-3 z-50">
-                <div className="px-4 pb-2 border-b border-neutral-100 flex items-center justify-between">
+              <div className="fixed sm:absolute top-16 sm:top-full left-3 right-3 sm:left-auto sm:right-0 sm:mt-2 sm:w-80 md:w-88 bg-white rounded-2xl shadow-2xl border border-neutral-200 py-3 z-50">
+                <div className="px-4 pb-2.5 border-b border-neutral-100 flex items-center justify-between">
                   <h4 className="text-xs font-bold uppercase tracking-wider text-neutral-500">Notifications</h4>
-                  <span className="text-[11px] font-semibold text-neutral-400">{notifications.length} alerts</span>
+                  <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-neutral-100 text-neutral-600">
+                    {notifications.length} alerts
+                  </span>
                 </div>
 
                 <div className="max-h-72 overflow-y-auto divide-y divide-neutral-100">

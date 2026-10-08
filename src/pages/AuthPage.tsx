@@ -139,7 +139,7 @@ export default function AuthPage({ setView, onAuth, intent = 'rider', defaultMod
     <div className="min-h-screen flex flex-col font-sans" style={{ background: '#f7f7f7' }}>
       {/* Nav */}
       <div className="flex items-center justify-between px-6 md:px-12 h-16 bg-white" style={{ borderBottom: '1px solid #e8e8e8' }}>
-        <button onClick={() => { if (setView) setView('landing'); navigate('/'); }}>
+        <button onClick={() => { if (setView) setView('landing'); navigate('/') }}>
           <img src="/logo.png" alt="FutaRide" className="h-8 w-auto" />
         </button>
         <button onClick={() => { setMode(m => m === 'login' ? 'signup' : 'login'); setError('') }}
@@ -246,13 +246,26 @@ export default function AuthPage({ setView, onAuth, intent = 'rider', defaultMod
                 <input
                   type={showPassword ? 'text' : 'password'}
                   value={form.password}
+                  onFocus={() => {
+                    if (mode === 'signup') setPasswordTouched(true)
+                  }}
                   onChange={e => {
                     set('password', e.target.value)
                     if (!passwordTouched) setPasswordTouched(true)
                   }}
                   placeholder="••••••••"
-                  className="w-full pl-4 pr-11 py-3 rounded-xl text-sm focus:outline-none"
-                  style={{ background: '#f7f7f7', border: `1px solid ${error ? '#fca5a5' : '#e8e8e8'}`, color: '#1a1a1a' }}
+                  className="w-full pl-4 pr-11 py-3 rounded-xl text-sm focus:outline-none transition-colors"
+                  style={{
+                    background: '#f7f7f7',
+                    border: `1px solid ${
+                      error
+                        ? '#dc2626'
+                        : mode === 'signup' && passwordTouched && !isPasswordValid
+                        ? '#fca5a5'
+                        : '#e8e8e8'
+                    }`,
+                    color: '#1a1a1a',
+                  }}
                 />
                 <button
                   type="button"
@@ -262,12 +275,10 @@ export default function AuthPage({ setView, onAuth, intent = 'rider', defaultMod
                   tabIndex={-1}
                 >
                   {showPassword ? (
-                    /* Eye-slash (Hide) Icon */
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l18 18" />
                     </svg>
                   ) : (
-                    /* Eye (Show) Icon */
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                       <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
@@ -277,16 +288,24 @@ export default function AuthPage({ setView, onAuth, intent = 'rider', defaultMod
               </div>
 
               {mode === 'signup' && passwordTouched && (
-                <div className="mt-3 p-3 rounded-xl bg-neutral-50 border border-neutral-200 text-xs space-y-1.5">
+                <div className="mt-3 p-3 rounded-xl bg-neutral-50 border border-neutral-200 text-xs space-y-1.5 transition-all">
                   <p className="font-semibold text-neutral-700 mb-1">Password Requirements:</p>
                   {passwordRules.map((rule, idx) => (
-                    <div key={idx} className="flex items-center gap-2">
-                      <span className={`w-3.5 h-3.5 rounded-full flex items-center justify-center text-[9px] font-bold ${
-                        rule.valid ? 'bg-emerald-500 text-white' : 'bg-neutral-300 text-neutral-600'
-                      }`}>
-                        {rule.valid ? '✓' : '•'}
+                    <div key={idx} className="flex items-center gap-2 transition-colors">
+                      <span
+                        className={`w-3.5 h-3.5 rounded-full flex items-center justify-center text-[9px] font-bold transition-all ${
+                          rule.valid
+                            ? 'bg-emerald-500 text-white'
+                            : 'bg-red-500 text-white'
+                        }`}
+                      >
+                        {rule.valid ? '✓' : '✕'}
                       </span>
-                      <span className={rule.valid ? 'text-emerald-700 font-medium' : 'text-neutral-500'}>
+                      <span
+                        className={`transition-colors font-medium ${
+                          rule.valid ? 'text-emerald-700' : 'text-red-600'
+                        }`}
+                      >
                         {rule.label}
                       </span>
                     </div>
