@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { type View } from '../App'
 import { useAuth } from '../context/AuthContext'
@@ -41,6 +41,10 @@ export default function Landing({ setView, goAdmin }: Props) {
   const [tapCount, setTapCount] = useState(0)
   const [showAdminLink, setShowAdminLink] = useState(false)
 
+  useEffect(() => {
+    document.title = 'FutaRide | Smart Campus Mobility'
+  }, [])
+
   function handleLogoTap() {
     const next = tapCount + 1
     setTapCount(next)
@@ -79,7 +83,7 @@ export default function Landing({ setView, goAdmin }: Props) {
       <nav className="fixed top-0 inset-x-0 z-50 flex items-center justify-between px-4 md:px-14 h-14 md:h-16"
         style={{ background: 'rgba(255,255,255,0.96)', backdropFilter: 'blur(20px)', borderBottom: '1px solid #e8e8e8' }}>
         <button onClick={handleLogoTap} className="select-none">
-          <img src="logo.png" alt="FutaRide" className="h-7 md:h-8 w-auto" />
+          <img src="/logo.png" alt="FutaRide" className="h-7 md:h-8 w-auto" />
         </button>
         <div className="flex items-center gap-2">
           <button onClick={handleGoDriver}
@@ -187,7 +191,7 @@ export default function Landing({ setView, goAdmin }: Props) {
         </div>
       </div>
 
-      {/* ── Features ───────────────────────────── */}
+      {/* ── Features ───────────────────── */}
       <section className="relative overflow-hidden py-16 md:py-28 px-4 md:px-14" style={{ background: '#fff' }}>
         <div className="absolute inset-0 pointer-events-none" style={{ background: LIGHT_GRADIENT }} />
         <div className="relative max-w-5xl mx-auto">
@@ -411,7 +415,7 @@ export default function Landing({ setView, goAdmin }: Props) {
               <img src="/logo-white.png" alt="FutaRide" className="h-7 w-auto" />
             </button>
             <p className="text-xs leading-relaxed" style={{ color: '#666', maxWidth: '180px' }}>
-              Campus Keke dispatch for Federal University of Technology, Akure.
+              Smart Campus Mobility for Federal University of Technology, Akure.
             </p>
           </div>
 
@@ -460,7 +464,7 @@ export default function Landing({ setView, goAdmin }: Props) {
                 FUTA Campus, Akure,<br />Ondo State, Nigeria
               </li>
               <li>
-                <span className="text-sm" style={{ color: '#666' }}>futaride@org.com</span>
+                <span className="text-sm" style={{ color: '#666' }}>support@futaride.com</span>
               </li>
             </ul>
           </div>

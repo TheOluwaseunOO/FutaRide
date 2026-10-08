@@ -1,7 +1,8 @@
 {
-  "name": "figma-make-app",
+  "name": "futaride",
   "private": true,
   "version": "1.0.0",
+  "description": "FutaRide | Smart Campus Mobility",
   "type": "module",
   "scripts": {
     "dev": "vite",
