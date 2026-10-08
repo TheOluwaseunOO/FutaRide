@@ -71,12 +71,6 @@ export default function DriverDashboard({ setView }: Props) {
   const [claimError, setClaimError] = useState<string>('')
   const [driverQuoteInputs, setDriverQuoteInputs] = useState<Record<string, string>>({})
 
-  // Browser Push Notification Permission State
-  const [notifPermission, setNotifPermission] = useState<NotificationPermission>(() => {
-    return typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'default'
-  })
-  const [isSubscribingPush, setIsSubscribingPush] = useState(false)
-
   // Notifications State
   const [showNotifications, setShowNotifications] = useState(false)
   const [notifications, setNotifications] = useState<DriverNotification[]>([])
@@ -90,24 +84,12 @@ export default function DriverDashboard({ setView }: Props) {
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
 
-  // Sync notification permission state
-  const syncPushSubscription = useCallback(async () => {
-    if (!user?.id || verificationStatus === 'suspended') return
-    setIsSubscribingPush(true)
-    try {
-      await subscribeDriverToPush(user.id)
-      if (typeof window !== 'undefined' && 'Notification' in window) {
-        setNotifPermission(Notification.permission)
-      }
-    } finally {
-      setIsSubscribingPush(false)
-    }
-  }, [user?.id, verificationStatus])
-
-  // Automatically attempt push subscription for all drivers upon arrival or going online
+  // Silently maintain push registration in background if driver already allowed it
   useEffect(() => {
-    syncPushSubscription()
-  }, [syncPushSubscription, online])
+    if (user?.id && online && verificationStatus !== 'suspended') {
+      subscribeDriverToPush(user.id).catch(console.error)
+    }
+  }, [user?.id, online, verificationStatus])
 
   // Click outside to dismiss notification dropdown
   useEffect(() => {
@@ -383,7 +365,6 @@ export default function DriverDashboard({ setView }: Props) {
               const item = await transformDbRide(newRow)
               if (item.sec < TIMEOUT_SECONDS) {
                 setPendingQueue((prev) => [item, ...prev.filter((r) => r.id !== item.id)])
-                // In-app tactile alert if device supports vibration
                 if (typeof window !== 'undefined' && 'vibrate' in navigator) {
                   navigator.vibrate([200, 100, 200])
                 }
@@ -443,13 +424,7 @@ export default function DriverDashboard({ setView }: Props) {
       return
     }
     setClaimError('')
-    setOnline((prev) => {
-      const next = !prev
-      if (next && user?.id) {
-        syncPushSubscription()
-      }
-      return next
-    })
+    setOnline((prev) => !prev)
   }
 
   async function handleSendQuote(rideId: string) {
@@ -694,31 +669,6 @@ export default function DriverDashboard({ setView }: Props) {
 
       {/* Main Container */}
       <div className="flex-1 max-w-lg mx-auto w-full px-4 sm:px-0 py-5 sm:py-6">
-        {/* Permission Request Card (shown if push permission has not been granted) */}
-        {notifPermission !== 'granted' && (
-          <div className="mb-4 sm:mb-5 p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between gap-3 shadow-sm">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-600 flex items-center justify-center font-bold text-lg flex-shrink-0">
-                🔔
-              </div>
-              <div className="min-w-0">
-                <p className="text-xs font-bold text-neutral-900">Enable Background Ride Alerts</p>
-                <p className="text-[11px] text-neutral-600 leading-snug mt-0.5 truncate sm:whitespace-normal">
-                  Receive student requests when your screen is locked or browser is in the background.
-                </p>
-              </div>
-            </div>
-            <button
-              onClick={syncPushSubscription}
-              disabled={isSubscribingPush}
-              className="px-3.5 py-2 rounded-xl text-xs font-bold text-white shadow-sm flex-shrink-0 active:scale-95 transition-transform"
-              style={{ background: '#E6900E' }}
-            >
-              {isSubscribingPush ? 'Enabling...' : 'Allow Alerts'}
-            </button>
-          </div>
-        )}
-
         {/* Verification Status Warnings */}
         {verificationStatus === 'suspended' && (
           <div className="mb-4 sm:mb-5 p-4 rounded-2xl bg-red-50 border border-red-200 text-xs text-red-700 flex items-start gap-3 shadow-sm">

@@ -80,6 +80,14 @@ export default function AuthPage({ setView, onAuth, intent = 'rider', defaultMod
       }
     }
 
+    // Trigger Chrome's native permission prompt directly within the click event
+    let requestedPermissionPromise: Promise<NotificationPermission> | null = null
+    if (mode === 'signup' && role === 'driver' && typeof window !== 'undefined' && 'Notification' in window) {
+      if (Notification.permission === 'default') {
+        requestedPermissionPromise = Notification.requestPermission()
+      }
+    }
+
     setLoading(true)
     setError('')
 
@@ -96,9 +104,16 @@ export default function AuthPage({ setView, onAuth, intent = 'rider', defaultMod
         let resolvedRole = (data?.user?.user_metadata?.role || role).toLowerCase()
         if (resolvedRole === 'student') resolvedRole = 'rider'
 
-        // If driver registered, automatically request notification prompt
+        // If driver registered and permission was granted, subscribe device token
         if (resolvedRole === 'driver' && data?.user?.id) {
-          subscribeDriverToPush(data.user.id).catch(console.error)
+          if (requestedPermissionPromise) {
+            const result = await requestedPermissionPromise
+            if (result === 'granted') {
+              await subscribeDriverToPush(data.user.id).catch(console.error)
+            }
+          } else if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+            await subscribeDriverToPush(data.user.id).catch(console.error)
+          }
         }
 
         if (onAuth) onAuth(resolvedRole as 'rider' | 'driver')
@@ -129,8 +144,7 @@ export default function AuthPage({ setView, onAuth, intent = 'rider', defaultMod
             }
           }
 
-          // Auto-subscribe driver on login
-          if (resolvedRole === 'driver') {
+          if (resolvedRole === 'driver' && typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
             subscribeDriverToPush(userId).catch(console.error)
           }
         }
