@@ -8,9 +8,7 @@ const corsHeaders = {
 }
 
 serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders })
-  }
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
 
   try {
     const supabaseClient = createClient(
@@ -20,23 +18,26 @@ serve(async (req) => {
 
     const payload = await req.json()
     const ride = payload.record || payload
+    console.log('Incoming ride payload:', JSON.stringify(ride))
 
-    // 1. Fetch all driver subscriptions
     const { data: subscriptions, error: subError } = await supabaseClient
       .from('driver_push_subscriptions')
       .select('*')
 
     if (subError || !subscriptions || subscriptions.length === 0) {
+      console.log('No subscriptions found or error:', subError)
       return new Response(JSON.stringify({ sent: 0, message: 'No registered driver devices found' }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
     }
 
-    // 2. Configure VAPID details
+    console.log(`Found ${subscriptions.length} active subscriptions. Setting VAPID...`)
+
     const vapidPublic = Deno.env.get('VAPID_PUBLIC_KEY')
     const vapidPrivate = Deno.env.get('VAPID_PRIVATE_KEY')
 
     if (!vapidPublic || !vapidPrivate) {
+      console.error('Missing VAPID keys in Edge Function secrets!')
       throw new Error('VAPID keys not configured in Edge Function secrets')
     }
 
@@ -54,7 +55,6 @@ serve(async (req) => {
       rideId: ride.id,
     })
 
-    // 3. Broadcast to all active driver subscriptions
     let sentCount = 0
     await Promise.all(
       subscriptions.map(async (sub) => {
@@ -67,8 +67,9 @@ serve(async (req) => {
             pushPayload
           )
           sentCount++
+          console.log(`Push sent successfully to endpoint ${sub.id}`)
         } catch (err: any) {
-          // Clean up expired or revoked endpoints
+          console.error(`Push FAILED for sub ${sub.id}: Status ${err.statusCode} - ${err.message} - Body: ${err.body}`)
           if (err.statusCode === 410 || err.statusCode === 404) {
             await supabaseClient.from('driver_push_subscriptions').delete().eq('endpoint', sub.endpoint)
           }
@@ -76,10 +77,12 @@ serve(async (req) => {
       })
     )
 
+    console.log(`Finished sending. Sent: ${sentCount}/${subscriptions.length}`)
     return new Response(JSON.stringify({ success: true, sent: sentCount, total: subscriptions.length }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     })
   } catch (err: any) {
+    console.error('Fatal Edge Function Error:', err.message)
     return new Response(JSON.stringify({ error: err.message }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
