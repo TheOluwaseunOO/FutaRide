@@ -23,6 +23,7 @@ interface QueueRide {
   customDropoff?: string | null
   fareQuote?: number | null
   quoteStatus?: string
+  quotedDriverId?: string | null
 }
 
 interface CompletedRide {
@@ -80,14 +81,28 @@ export default function DriverDashboard({ setView }: Props) {
   const [showCancelModal, setShowCancelModal] = useState(false)
   const [isCancelling, setIsCancelling] = useState(false)
 
+  // iOS PWA Detection
+  const [showIosPrompt, setShowIosPrompt] = useState(false)
+
   const earnings = completedRides.reduce((s, r) => s + r.fare, 0)
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
 
-  // Silently maintain push registration in background if driver already allowed it
+  // Detect iOS Safari standalone mode
+  useEffect(() => {
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches || (navigator as any).standalone === true
+    if (isIOS && !isStandalone) {
+      setShowIosPrompt(true)
+    }
+  }, [])
+
+  // Universal Push Registration: Registers any device (laptop, Android, iOS PWA)
   useEffect(() => {
     if (user?.id && online && verificationStatus !== 'suspended') {
-      subscribeDriverToPush(user.id).catch(console.error)
+      subscribeDriverToPush(user.id).catch((err) => {
+        console.warn('Driver device push registration skipped or denied:', err)
+      })
     }
   }, [user?.id, online, verificationStatus])
 
@@ -147,7 +162,7 @@ export default function DriverDashboard({ setView }: Props) {
     setNotifications(list)
   }, [verificationStatus])
 
-  // Helper: Map database row to standard UI object
+  // Helper: Map database row to standard UI object safely
   async function transformDbRide(rideRow: any): Promise<QueueRide> {
     let fromName = rideRow.custom_pickup || ''
     let toName = rideRow.custom_dropoff || ''
@@ -173,17 +188,22 @@ export default function DriverDashboard({ setView }: Props) {
     let dept: string | undefined = undefined
 
     const riderId = rideRow.student_id || rideRow.rider_id
-    if (riderId) {
-      const { data: stProfile } = await supabase
-        .from('profiles')
-        .select('full_name, phone_number, department')
-        .eq('id', riderId)
-        .maybeSingle()
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+    if (riderId && uuidRegex.test(riderId)) {
+      try {
+        const { data: stProfile } = await supabase
+          .from('profiles')
+          .select('full_name, phone_number, department')
+          .eq('id', riderId)
+          .maybeSingle()
 
-      if (stProfile) {
-        riderName = stProfile.full_name || 'Rider'
-        phone = stProfile.phone_number || phone
-        dept = stProfile.department || undefined
+        if (stProfile) {
+          riderName = stProfile.full_name || 'Rider'
+          phone = stProfile.phone_number || phone
+          dept = stProfile.department || undefined
+        }
+      } catch (err) {
+        console.warn('Could not fetch rider profile:', err)
       }
     }
 
@@ -203,10 +223,11 @@ export default function DriverDashboard({ setView }: Props) {
       customDropoff: rideRow.custom_dropoff,
       fareQuote: rideRow.fare_quote ? Number(rideRow.fare_quote) : null,
       quoteStatus: rideRow.quote_status || 'none',
+      quotedDriverId: rideRow.quoted_driver_id || null,
     }
   }
 
-  // 0. Fetch and subscribe to driver's verification status
+  // Fetch driver verification status
   useEffect(() => {
     if (!user) return
 
@@ -250,7 +271,7 @@ export default function DriverDashboard({ setView }: Props) {
     }
   }, [user])
 
-  // 1. Check and restore active ongoing trip
+  // Restore active ongoing trip
   const restoreActiveRide = useCallback(async () => {
     if (!user) return
 
@@ -283,7 +304,7 @@ export default function DriverDashboard({ setView }: Props) {
     restoreActiveRide()
   }, [restoreActiveRide])
 
-  // 2. Fetch completed rides
+  // Fetch completed rides
   useEffect(() => {
     async function loadCompletedRides() {
       if (!user) return
@@ -328,7 +349,7 @@ export default function DriverDashboard({ setView }: Props) {
     loadCompletedRides()
   }, [user, phase])
 
-  // 3. Load initial queue
+  // Load initial queue
   const loadInitialQueue = useCallback(async () => {
     if (!online || verificationStatus === 'suspended') {
       setPendingQueue([])
@@ -347,7 +368,7 @@ export default function DriverDashboard({ setView }: Props) {
     }
   }, [online, verificationStatus])
 
-  // Realtime queue listener & device alert
+  // Realtime queue listener
   useEffect(() => {
     loadInitialQueue()
 
@@ -418,29 +439,72 @@ export default function DriverDashboard({ setView }: Props) {
     loadInitialQueue()
   }, [restoreActiveRide, loadInitialQueue])
 
-  function handleToggleOnline() {
+  async function handleToggleOnline() {
     if (verificationStatus === 'suspended') {
       setClaimError('Your account has been suspended by administration. You cannot go online.')
       return
     }
     setClaimError('')
-    setOnline((prev) => !prev)
+    const nextState = !online
+    setOnline(nextState)
+
+    if (nextState && user?.id) {
+      subscribeDriverToPush(user.id).catch((err) => {
+        console.warn('Could not register device push on toggle:', err)
+      })
+    }
   }
 
+  // 1. Send quote and attach quoted_driver_id
   async function handleSendQuote(rideId: string) {
-    if (verificationStatus === 'suspended') return
+    if (!user || verificationStatus === 'suspended') return
     const quoteVal = Number(driverQuoteInputs[rideId])
     if (!quoteVal || quoteVal <= 0) return
 
-    await supabase
+    const { error } = await supabase
       .from('rides')
       .update({
         fare_quote: quoteVal,
         quote_status: 'quoted',
+        quoted_driver_id: user.id,
       })
       .eq('id', rideId)
+
+    if (error) {
+      setClaimError(error.message || 'Failed to submit quote.')
+    }
   }
 
+  // 2. Reject countered price and re-open to all drivers
+  async function handleRejectCounter(rideId: string) {
+    if (!user) return
+    setClaimError('')
+
+    const { data, error } = await supabase.rpc('reject_ride_counter', {
+      p_ride_id: rideId,
+      p_driver_id: user.id,
+    })
+
+    if (error || !data?.success) {
+      // Fallback direct update
+      await supabase
+        .from('rides')
+        .update({
+          fare_quote: null,
+          quote_status: 'none',
+          quoted_driver_id: null,
+        })
+        .eq('id', rideId)
+    }
+
+    setDriverQuoteInputs((prev) => {
+      const next = { ...prev }
+      delete next[rideId]
+      return next
+    })
+  }
+
+  // 3. Accept agreed counter or fixed fare
   async function handleAcceptOffcampusAgreed(ride: QueueRide) {
     if (!user || verificationStatus === 'suspended') return
     const finalFare = Number(ride.fareQuote || ride.fare)
@@ -543,7 +607,6 @@ export default function DriverDashboard({ setView }: Props) {
 
   return (
     <div className="min-h-screen flex flex-col font-sans pb-12 sm:pb-8" style={{ background: '#f7f7f7' }}>
-      {/* Network Connectivity & Recovery Banner */}
       <NetworkBanner onReconnect={handleNetworkReconnect} />
 
       {/* Top Header */}
@@ -612,9 +675,8 @@ export default function DriverDashboard({ setView }: Props) {
                           n.type === 'error'
                             ? 'bg-red-500'
                             : n.type === 'success'
-                            ? 'bg-emerald-500'
                             : n.type === 'warning'
-                            ? 'bg-amber-500'
+                            : 'bg-amber-500'
                             : 'bg-blue-500'
                         }`}
                       />
@@ -669,6 +731,25 @@ export default function DriverDashboard({ setView }: Props) {
 
       {/* Main Container */}
       <div className="flex-1 max-w-lg mx-auto w-full px-4 sm:px-0 py-5 sm:py-6">
+        {/* iOS PWA Installation Notice */}
+        {showIosPrompt && (
+          <div className="mb-4 p-3.5 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-start gap-2.5 shadow-sm">
+            <span className="text-base flex-shrink-0 mt-0.5">📲</span>
+            <div className="flex-1 min-w-0">
+              <p className="font-bold">Using an iPhone?</p>
+              <p className="text-[11px] text-amber-800 mt-0.5 leading-relaxed">
+                To receive ride alerts while your screen is locked, tap <strong>Share</strong> at the bottom of Safari, then choose <strong>"Add to Home Screen"</strong>.
+              </p>
+            </div>
+            <button
+              onClick={() => setShowIosPrompt(false)}
+              className="text-amber-500 font-bold hover:text-amber-800 text-xs px-1"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         {/* Verification Status Warnings */}
         {verificationStatus === 'suspended' && (
           <div className="mb-4 sm:mb-5 p-4 rounded-2xl bg-red-50 border border-red-200 text-xs text-red-700 flex items-start gap-3 shadow-sm">
@@ -815,7 +896,7 @@ export default function DriverDashboard({ setView }: Props) {
           ))}
         </div>
 
-        {/* Tab: Queue - Offline / Suspended Empty State */}
+        {/* Tab: Queue - Offline / Suspended */}
         {tab === 'queue' && (!online || verificationStatus === 'suspended') && (
           <EmptyState
             icon="⏻"
@@ -849,6 +930,8 @@ export default function DriverDashboard({ setView }: Props) {
             ) : (
               pendingQueue.map((ride) => {
                 const isCustom = Boolean(ride.customPickup || ride.customDropoff)
+                const isMyQuote = ride.quotedDriverId === user?.id
+                const isBeingNegotiatedByOther = Boolean(ride.quotedDriverId && !isMyQuote)
 
                 return (
                   <div key={ride.id} className="bg-white rounded-2xl p-4 sm:p-5 border border-neutral-200 shadow-sm">
@@ -871,7 +954,13 @@ export default function DriverDashboard({ setView }: Props) {
                       </div>
                       <div className="text-right flex-shrink-0">
                         <p className="text-lg sm:text-xl font-black" style={{ color: '#E6900E' }}>
-                          {ride.fare > 0 ? `₦${ride.fare}` : ride.fareQuote ? `₦${ride.fareQuote}` : 'Needs quote'}
+                          {ride.fare > 0
+                            ? `₦${ride.fare}`
+                            : isMyQuote && ride.fareQuote
+                            ? `₦${ride.fareQuote}`
+                            : isBeingNegotiatedByOther
+                            ? 'In negotiation'
+                            : 'Needs quote'}
                         </p>
                         <div className="flex items-center gap-1 justify-end mt-1">
                           <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse" />
@@ -882,24 +971,52 @@ export default function DriverDashboard({ setView }: Props) {
 
                     {isCustom ? (
                       <div className="mt-3 pt-3 border-t border-neutral-100">
-                        {ride.quoteStatus === 'agreed' ? (
+                        {/* Case 1: Student accepted this driver's quote */}
+                        {ride.quoteStatus === 'agreed' && isMyQuote ? (
                           <button
                             onClick={() => handleAcceptOffcampusAgreed(ride)}
                             className="w-full py-2.5 sm:py-3 rounded-xl font-bold text-xs sm:text-sm bg-emerald-600 text-white hover:bg-emerald-700 active:scale-[0.99] transition-all shadow-sm"
                           >
                             Passenger Agreed to ₦{ride.fareQuote || ride.fare} — Confirm & Pick Up
                           </button>
-                        ) : ride.quoteStatus === 'countered' ? (
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-bold text-neutral-700">Rider countered: ₦{ride.fareQuote}</span>
-                            <button
-                              onClick={() => handleAcceptOffcampusAgreed(ride)}
-                              className="ml-auto px-4 py-2 rounded-xl text-xs font-bold bg-amber-500 text-white hover:bg-amber-600 active:scale-95 transition-all shadow-sm"
-                            >
-                              Accept ₦{ride.fareQuote}
-                            </button>
+                        ) : /* Case 2: Student countered, ONLY visible to the quoting driver */
+                        ride.quoteStatus === 'countered' && isMyQuote ? (
+                          <div className="space-y-2">
+                            <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-between">
+                              <span className="text-xs text-amber-900 font-medium">Student countered your quote:</span>
+                              <span className="text-sm font-black text-amber-600">₦{ride.fareQuote}</span>
+                            </div>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => handleRejectCounter(ride.id)}
+                                className="flex-1 py-2.5 rounded-xl text-xs font-bold border border-red-200 text-red-600 hover:bg-red-50 active:scale-95 transition-all"
+                              >
+                                Reject Offer
+                              </button>
+                              <button
+                                onClick={() => handleAcceptOffcampusAgreed(ride)}
+                                className="flex-1 py-2.5 rounded-xl text-xs font-bold bg-amber-500 text-white hover:bg-amber-600 active:scale-95 transition-all shadow-sm"
+                              >
+                                Accept ₦{ride.fareQuote}
+                              </button>
+                            </div>
+                          </div>
+                        ) : /* Case 3: Driver already submitted a quote, awaiting rider response */
+                        ride.quoteStatus === 'quoted' && isMyQuote ? (
+                          <div className="p-2.5 rounded-xl bg-neutral-50 border border-neutral-200 text-center">
+                            <p className="text-xs font-semibold text-neutral-600">
+                              Your quote of <span className="font-bold text-amber-600">₦{ride.fareQuote}</span> has been sent. Awaiting student response...
+                            </p>
+                          </div>
+                        ) : /* Case 4: Another driver is negotiating this ride */
+                        isBeingNegotiatedByOther ? (
+                          <div className="p-2.5 rounded-xl bg-neutral-50 border border-neutral-100 text-center">
+                            <p className="text-xs text-neutral-400 font-medium">
+                              Another driver is negotiating this trip. It will re-open if declined.
+                            </p>
                           </div>
                         ) : (
+                          /* Case 5: Ride is open to any driver to quote */
                           <div className="flex gap-2">
                             <input
                               type="number"

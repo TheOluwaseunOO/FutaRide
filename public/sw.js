@@ -40,7 +40,7 @@ self.addEventListener('push', (event) => {
       rideId,
     },
     actions: [
-      { action: 'view', title: '👀 View Ride' },
+      { action: 'view', title: 'View Ride' },
     ],
   }
 
