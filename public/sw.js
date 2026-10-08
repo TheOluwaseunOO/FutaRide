@@ -2,14 +2,30 @@
 self.addEventListener('push', (event) => {
   if (!event.data) return
 
-  const data = event.data.json()
-  const title = data.title || 'New Campus Ride Request!'
+  let data = {}
+  try {
+    data = event.data.json()
+  } catch (e) {
+    data = {
+      title: '🛺 New Ride Request!',
+      body: event.data.text() || 'A rider is waiting for dispatch on campus.',
+    }
+  }
+
+  const title = data.title || '🛺 New Ride Request!'
+  const body = data.body || data.message || 'A new student ride is available in the queue.'
+
   const options = {
-    body: data.message || 'A rider is waiting for dispatch.',
+    body,
     icon: '/logo.png',
     badge: '/logo.png',
-    vibrate: [200, 100, 200, 100, 200],
-    data: { url: data.url || '/driver' },
+    vibrate: [300, 150, 300, 150, 300],
+    tag: data.rideId || 'ride-alert',
+    renotify: true,
+    requireInteraction: true,
+    data: {
+      url: data.url || '/driver',
+    },
   }
 
   event.waitUntil(self.registration.showNotification(title, options))
@@ -17,9 +33,11 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
+  const targetUrl = event.notification.data?.url || '/driver'
+
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
-      // Focus existing tab if open
+      // Focus existing driver dashboard tab if open
       for (const client of windowClients) {
         if (client.url.includes('/driver') && 'focus' in client) {
           return client.focus()
@@ -27,7 +45,7 @@ self.addEventListener('notificationclick', (event) => {
       }
       // Otherwise open a new tab
       if (clients.openWindow) {
-        return clients.openWindow(event.notification.data.url)
+        return clients.openWindow(targetUrl)
       }
     })
   )

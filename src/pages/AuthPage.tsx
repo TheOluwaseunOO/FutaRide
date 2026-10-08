@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { type View } from '../App'
 import { useAuth } from '../context/AuthContext'
 import { supabase } from '../lib/supabase'
+import { subscribeDriverToPush } from '../lib/pushNotifications'
 
 interface Props {
   setView?: (v: View) => void
@@ -95,6 +96,11 @@ export default function AuthPage({ setView, onAuth, intent = 'rider', defaultMod
         let resolvedRole = (data?.user?.user_metadata?.role || role).toLowerCase()
         if (resolvedRole === 'student') resolvedRole = 'rider'
 
+        // If driver registered, automatically request notification prompt
+        if (resolvedRole === 'driver' && data?.user?.id) {
+          subscribeDriverToPush(data.user.id).catch(console.error)
+        }
+
         if (onAuth) onAuth(resolvedRole as 'rider' | 'driver')
         if (setView) setView(resolvedRole as any)
         navigate(resolvedRole === 'driver' ? '/driver' : '/rider')
@@ -121,6 +127,11 @@ export default function AuthPage({ setView, onAuth, intent = 'rider', defaultMod
             if (metaRole === 'driver') {
               resolvedRole = 'driver'
             }
+          }
+
+          // Auto-subscribe driver on login
+          if (resolvedRole === 'driver') {
+            subscribeDriverToPush(userId).catch(console.error)
           }
         }
 
@@ -184,7 +195,7 @@ export default function AuthPage({ setView, onAuth, intent = 'rider', defaultMod
                   type="text"
                   value={form.name}
                   onChange={e => set('name', e.target.value)}
-                  placeholder={role === 'rider' ? 'e.g. Fatimah Abubakar' : 'e.g. Adewale Kayode'}
+                  placeholder={role === 'rider' ? 'e.g. Oladele Israel' : 'e.g. Adewale Kayode'}
                   className="w-full px-4 py-3 rounded-xl text-sm focus:outline-none"
                   style={{ background: '#f7f7f7', border: '1px solid #e8e8e8', color: '#1a1a1a' }}
                 />
