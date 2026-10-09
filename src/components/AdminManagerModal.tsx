@@ -27,7 +27,6 @@ export default function AdminManagerModal({ isOpen, onClose }: Props) {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [statusMsg, setStatusMsg] = useState('')
 
-  // Toggles for new admin
   const [rights, setRights] = useState({
     can_verify_drivers: true,
     can_suspend_drivers: false,
@@ -139,7 +138,7 @@ export default function AdminManagerModal({ isOpen, onClose }: Props) {
                       type="checkbox"
                       checked={rights[item.key as keyof typeof rights]}
                       onChange={(e) => setRights({ ...rights, [item.key]: e.target.checked })}
-                      className="mt-0.5 rounded text-amber-500 focus:ring-0"
+                      className="mt-0.5 rounded accent-[#E6900E] focus:ring-0 cursor-pointer"
                     />
                     <div className="min-w-0">
                       <p className="text-xs font-bold text-neutral-800 leading-none">{item.label}</p>
@@ -177,13 +176,13 @@ export default function AdminManagerModal({ isOpen, onClose }: Props) {
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <p className="text-xs font-bold text-neutral-900 truncate">{admin.email}</p>
+                        <p className="text-xs font-medium text-neutral-900 truncate">{admin.email}</p>
                         {admin.is_super_admin && (
-                          <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
+                          <span className="text-[10px] font-normal uppercase px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
                             Super Admin
                           </span>
                         )}
-                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${admin.invite_status === 'accepted' ? 'bg-emerald-50 text-emerald-600' : 'bg-neutral-100 text-neutral-500'}`}>
+                        <span className={`text-[10px] font-light px-1.5 py-0.5 rounded ${admin.invite_status === 'accepted' ? 'bg-emerald-50 text-emerald-600' : 'bg-neutral-100 text-neutral-500'}`}>
                           {admin.invite_status}
                         </span>
                       </div>

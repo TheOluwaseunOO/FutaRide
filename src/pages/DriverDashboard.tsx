@@ -83,11 +83,16 @@ export default function DriverDashboard({ setView }: Props) {
   const [showCancelModal, setShowCancelModal] = useState(false)
   const [isCancelling, setIsCancelling] = useState(false)
   const [showIosPrompt, setShowIosPrompt] = useState(false)
+
+  // Header chat state & notification alert
   const [showChatModal, setShowChatModal] = useState(false)
+  const [hasUnreadChat, setHasUnreadChat] = useState(false)
+  const [chatToast, setChatToast] = useState<string | null>(null)
 
   const earnings = completedRides.reduce((s, r) => s + r.fare, 0)
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
+  const hasActiveTrip = activeRide && phase && phase !== 'completed'
 
   function getNotificationBadgeColor(type: DriverNotification['type']) {
     switch (type) {
@@ -125,6 +130,32 @@ export default function DriverDashboard({ setView }: Props) {
     }
     loadMyQuotes()
   }, [user])
+
+  // In-Ride Chat Notifications Listener for Driver
+  useEffect(() => {
+    if (!activeRide?.id || !user) return
+
+    const chatChannel = supabase
+      .channel(`chat-listener-driver-${activeRide.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'ride_messages', filter: `ride_id=eq.${activeRide.id}` },
+        (payload: any) => {
+          if (payload.new.sender_id !== user.id) {
+            if (!showChatModal) {
+              setHasUnreadChat(true)
+              setChatToast(payload.new.message || 'New message from passenger')
+              setTimeout(() => setChatToast(null), 4000)
+            }
+          }
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(chatChannel)
+    }
+  }, [activeRide?.id, user, showChatModal])
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -487,6 +518,7 @@ export default function DriverDashboard({ setView }: Props) {
     setActiveRide(null)
     setPhase(null)
     setShowChatModal(false)
+    setHasUnreadChat(false)
   }
 
   async function handleConfirmCancel(reason: string) {
@@ -506,6 +538,7 @@ export default function DriverDashboard({ setView }: Props) {
 
       setShowCancelModal(false)
       setShowChatModal(false)
+      setHasUnreadChat(false)
       setActiveRide(null)
       setPhase(null)
     } catch (err) {
@@ -518,6 +551,17 @@ export default function DriverDashboard({ setView }: Props) {
   return (
     <div className="min-h-screen flex flex-col font-sans pb-12 sm:pb-8" style={{ background: '#f7f7f7' }}>
       <NetworkBanner onReconnect={() => { restoreActiveRide(); loadInitialQueue(); }} />
+
+      {/* Floating Chat Alert Toast */}
+      {chatToast && (
+        <div 
+          onClick={() => { setShowChatModal(true); setHasUnreadChat(false); setChatToast(null) }}
+          className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-neutral-900 text-white px-4 py-2.5 rounded-2xl shadow-xl flex items-center gap-2.5 cursor-pointer animate-bounce border border-neutral-700"
+        >
+          <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
+          <p className="text-xs font-semibold truncate max-w-xs">{activeRide?.rider || 'Passenger'}: "{chatToast}"</p>
+        </div>
+      )}
 
       {/* Top Header */}
       <header className="sticky top-0 z-40 flex items-center justify-between px-4 sm:px-8 h-14 sm:h-16 bg-white/95 backdrop-blur border-b border-neutral-200">
@@ -546,6 +590,25 @@ export default function DriverDashboard({ setView }: Props) {
               />
             </button>
           </div>
+
+          {/* Header In-Ride Chat Trigger */}
+          {hasActiveTrip && (
+            <button
+              onClick={() => {
+                setShowChatModal(true)
+                setHasUnreadChat(false)
+              }}
+              className="relative p-2 rounded-xl text-neutral-600 hover:bg-neutral-100 transition-colors"
+              title="Chat with passenger"
+            >
+              <svg className="w-5 h-5 text-neutral-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+              </svg>
+              {hasUnreadChat && (
+                <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+              )}
+            </button>
+          )}
 
           {/* Notifications Dropdown Container */}
           <div className="relative" ref={notifRef}>
@@ -695,39 +758,21 @@ export default function DriverDashboard({ setView }: Props) {
                   >
                     Passenger Boarded — Start Ride
                   </button>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => setShowChatModal(true)}
-                      className="flex-1 py-2.5 rounded-xl text-xs font-bold bg-neutral-900 text-white hover:bg-neutral-800 transition-colors flex items-center justify-center gap-1.5 shadow-sm"
-                    >
-                      <span>💬</span>
-                      <span>Chat with Rider</span>
-                    </button>
-                    <button
-                      onClick={() => setShowCancelModal(true)}
-                      className="flex-1 py-2.5 rounded-xl text-xs font-bold border border-red-200 text-red-600 hover:bg-red-50 transition-colors"
-                    >
-                      Cancel Ride
-                    </button>
-                  </div>
+                  <button
+                    onClick={() => setShowCancelModal(true)}
+                    className="w-full py-2.5 rounded-xl text-xs font-bold border border-red-200 text-red-600 hover:bg-red-50 transition-colors"
+                  >
+                    Cancel Ride
+                  </button>
                 </div>
               ) : (
-                <div className="space-y-2">
-                  <button
-                    onClick={completeRide}
-                    className="w-full py-3 sm:py-3.5 rounded-xl font-bold text-xs sm:text-sm text-white hover:opacity-90 active:scale-[0.99] transition-all shadow-sm"
-                    style={{ background: '#1a1a1a' }}
-                  >
-                    Complete Ride ✓
-                  </button>
-                  <button
-                    onClick={() => setShowChatModal(true)}
-                    className="w-full py-2.5 rounded-xl text-xs font-bold bg-neutral-100 text-neutral-800 hover:bg-neutral-200 transition-colors flex items-center justify-center gap-1.5"
-                  >
-                    <span>💬</span>
-                    <span>Chat with Rider</span>
-                  </button>
-                </div>
+                <button
+                  onClick={completeRide}
+                  className="w-full py-3 sm:py-3.5 rounded-xl font-bold text-xs sm:text-sm text-white hover:opacity-90 active:scale-[0.99] transition-all shadow-sm"
+                  style={{ background: '#1a1a1a' }}
+                >
+                  Complete Ride ✓
+                </button>
               )}
             </div>
           </div>
