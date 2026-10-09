@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { type View } from '../App'
 import { useAuth } from '../context/AuthContext'
@@ -19,6 +19,13 @@ interface AssignedDriver {
   phone: string
 }
 
+interface PreloadedRoute {
+  id: string
+  pickup_location_id: string
+  dropoff_location_id: string
+  base_fare: number
+}
+
 const FALLBACK_HUBS: LocationHub[] = [
   { id: '1', name: 'FUTA North Gate' },
   { id: '2', name: 'FUTA South Gate' },
@@ -32,14 +39,14 @@ const FALLBACK_HUBS: LocationHub[] = [
 ]
 
 const FALLBACK_FARES: Record<string, number> = {
-  'FUTA North Gate→FUTA South Gate': 500,
+  'FUTA North Gate→FUTA South Gate': 700,
   'FUTA North Gate→Obanla Campus Center': 500,
   'FUTA North Gate→School of Engineering (SEET)': 500,
   'FUTA North Gate→Obakekere Junction': 700,
   'FUTA North Gate→Aule Junction Hub': 900,
   'FUTA North Gate→FUTA Junction (Ilesha Rd)': 700,
   'FUTA North Gate→South Gate / Titilayo': 600,
-  'FUTA South Gate→FUTA North Gate': 500,
+  'FUTA South Gate→FUTA North Gate': 700,
   'FUTA South Gate→Obanla Campus Center': 500,
   'FUTA South Gate→School of Engineering (SEET)': 500,
   'FUTA South Gate→Obakekere Junction': 600,
@@ -74,6 +81,9 @@ export default function StudentDashboard({ setView }: Props) {
   const [hubs, setHubs] = useState<LocationHub[]>(FALLBACK_HUBS)
   const [loadingHubs, setLoadingHubs] = useState(true)
 
+  // In-memory route map to eliminate the 1-second price flickering
+  const routesCache = useRef<Map<string, { id: string; fare: number }>>(new Map())
+
   // Pickup selection
   const [pickupHub, setPickupHub] = useState<LocationHub | null>(null)
   const [isPickupOthers, setIsPickupOthers] = useState(false)
@@ -86,6 +96,7 @@ export default function StudentDashboard({ setView }: Props) {
 
   const [dynamicFare, setDynamicFare] = useState<number | null>(null)
   const [activeRouteId, setActiveRouteId] = useState<string | null>(null)
+  const [isResolvingFare, setIsResolvingFare] = useState(false)
 
   // Active Ride & Live Negotiation State
   const [activeRideId, setActiveRideId] = useState<string | null>(null)
@@ -210,48 +221,81 @@ export default function StudentDashboard({ setView }: Props) {
     restoreRiderRide()
   }, [restoreRiderRide])
 
-  // 2. Fetch hubs on mount
+  // 2. Fetch hubs & PRELOAD all routes into cache upfront to eliminate price delay
   useEffect(() => {
-    async function loadHubs() {
+    async function initLocationsAndRoutes() {
       try {
         setLoadingHubs(true)
-        const { data, error } = await supabase
-          .from('locations')
-          .select('id, name')
-          .order('name', { ascending: true })
+        const [{ data: locData }, { data: routeData }] = await Promise.all([
+          supabase.from('locations').select('id, name').order('name', { ascending: true }),
+          supabase.from('routes').select('id, pickup_location_id, dropoff_location_id, base_fare'),
+        ])
 
-        if (!error && data && data.length > 0) {
-          const hasOthers = data.some(h => h.name.toLowerCase().includes('others'))
+        if (locData && locData.length > 0) {
+          const hasOthers = locData.some(h => h.name.toLowerCase().includes('others'))
           if (!hasOthers) {
-            setHubs([...data, { id: 'offcampus', name: 'Others' }])
+            setHubs([...locData, { id: 'offcampus', name: 'Others' }])
           } else {
-            setHubs(data)
+            setHubs(locData)
           }
         }
+
+        if (routeData && routeData.length > 0) {
+          routeData.forEach((r: PreloadedRoute) => {
+            const key = `${r.pickup_location_id}::${r.dropoff_location_id}`
+            routesCache.current.set(key, { id: r.id, fare: Number(r.base_fare) })
+          })
+        }
       } catch (err) {
-        console.warn('Fallback hubs notice:', err)
+        console.warn('Locations/routes preload notice:', err)
       } finally {
         setLoadingHubs(false)
       }
     }
-    loadHubs()
+    initLocationsAndRoutes()
   }, [])
 
-  // 3. Resolve Route & Standard Campus Fare
+  // 3. Instant 0ms Route & Fare Resolution
   useEffect(() => {
     if (!pickupHub || !dropoffHub) {
       setDynamicFare(null)
       setActiveRouteId(null)
+      setIsResolvingFare(false)
       return
     }
 
     if (isCustomTrip) {
       setDynamicFare(0)
       setActiveRouteId(null)
+      setIsResolvingFare(false)
       return
     }
 
-    async function resolveRoute() {
+    // 1. Check synchronous fast cache (0ms delay)
+    const directKey = `${pickupHub.id}::${dropoffHub.id}`
+    const cached = routesCache.current.get(directKey)
+
+    if (cached) {
+      setActiveRouteId(cached.id)
+      setDynamicFare(cached.fare)
+      setIsResolvingFare(false)
+      return
+    }
+
+    // 2. Fallback table check (0ms delay)
+    const fallbackKey = `${pickupHub.name}→${dropoffHub.name}`
+    const reverseKey = `${dropoffHub.name}→${pickupHub.name}`
+    const staticFare = FALLBACK_FARES[fallbackKey] || FALLBACK_FARES[reverseKey]
+
+    if (staticFare) {
+      setDynamicFare(staticFare)
+      setIsResolvingFare(false)
+      return
+    }
+
+    // 3. If uncached, fetch from DB while showing zero stale data
+    setIsResolvingFare(true)
+    async function resolveUncachedRoute() {
       try {
         const { data } = await supabase
           .from('routes')
@@ -261,19 +305,20 @@ export default function StudentDashboard({ setView }: Props) {
           .maybeSingle()
 
         if (data) {
+          routesCache.current.set(directKey, { id: data.id, fare: Number(data.base_fare) })
           setActiveRouteId(data.id)
           setDynamicFare(Number(data.base_fare))
-          return
+        } else {
+          setDynamicFare(500)
         }
-
-        const fallbackKey = `${pickupHub!.name}→${dropoffHub!.name}`
-        const reverseKey = `${dropoffHub!.name}→${pickupHub!.name}`
-        setDynamicFare(FALLBACK_FARES[fallbackKey] || FALLBACK_FARES[reverseKey] || 500)
       } catch {
         setDynamicFare(500)
+      } finally {
+        setIsResolvingFare(false)
       }
     }
-    resolveRoute()
+
+    resolveUncachedRoute()
   }, [pickupHub, dropoffHub, isPickupOthers, isDropoffOthers])
 
   // 4. Fetch trip history
@@ -756,7 +801,13 @@ export default function StudentDashboard({ setView }: Props) {
                           <p className="text-xs font-bold text-orange-600">Fixed Campus Fare</p>
                           <p className="text-[11px] text-neutral-500">Standard rate · Pay cash on arrival</p>
                         </div>
-                        <span className="text-2xl font-black text-amber-600">₦{dynamicFare ?? 500}</span>
+                        <div className="text-right">
+                          {isResolvingFare ? (
+                            <span className="inline-block w-16 h-7 bg-amber-200/60 animate-pulse rounded-lg" />
+                          ) : (
+                            <span className="text-2xl font-black text-amber-600">₦{dynamicFare ?? 500}</span>
+                          )}
+                        </div>
                       </div>
                     )}
 
@@ -768,7 +819,7 @@ export default function StudentDashboard({ setView }: Props) {
 
                     <button
                       onClick={handleRequest}
-                      disabled={isSubmitting}
+                      disabled={isSubmitting || isResolvingFare}
                       className="w-full py-3.5 sm:py-4 rounded-xl font-bold text-xs sm:text-sm bg-amber-500 text-white hover:bg-amber-600 active:scale-[0.99] transition-all shadow-sm disabled:opacity-50"
                     >
                       {isSubmitting ? 'Requesting...' : isCustomTrip ? 'Request Custom Ride' : 'Request Ride'}
@@ -992,7 +1043,7 @@ export default function StudentDashboard({ setView }: Props) {
               <EmptyState
                 icon="🛺"
                 title="No Trips Recorded"
-                description="You haven't order any rides yet. Going somewhere?"
+                description="You haven't ordered any rides yet. Going somewhere?"
                 actionLabel="Book a Ride Now"
                 onAction={() => setTab('book')}
               />
