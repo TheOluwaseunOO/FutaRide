@@ -114,7 +114,6 @@ export default function StudentDashboard({ setView }: Props) {
   const [requestError, setRequestError] = useState<string>('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   
-  // Clean initialization directly to 'idle'
   const [phase, setPhase] = useState<Phase>('idle')
   const [tab, setTab] = useState<'book' | 'history'>('book')
 
@@ -132,7 +131,7 @@ export default function StudentDashboard({ setView }: Props) {
 
     try {
       const [{ data: dp }, { data: p }] = await Promise.all([
-        supabase.from('driver_profiles').select('*').eq('id', driverId).maybeSingle(),
+        supabase.from('driver_profiles').select('*').or(`id.eq.${driverId},user_id.eq.${driverId}`).maybeSingle(),
         supabase.from('profiles').select('*').eq('id', driverId).maybeSingle(),
       ])
 
@@ -421,19 +420,20 @@ export default function StudentDashboard({ setView }: Props) {
     return () => clearInterval(timer)
   }, [phase, activeRideId, rideCreatedAt, timeLeft])
 
-  // Realtime subscription for active ride updates & RPC-powered driver quote resolution
+  // Realtime subscription for active ride updates & bulletproof quote loading
   useEffect(() => {
     if (!activeRideId) return
 
     async function loadQuotes() {
       try {
-        const { data, error } = await supabase.rpc('get_ride_quotes_with_drivers', {
+        // Attempt 1: Fetch via Postgres RPC
+        const { data: rpcData, error: rpcErr } = await supabase.rpc('get_ride_quotes_with_drivers', {
           p_ride_id: activeRideId,
         })
 
-        if (!error && data) {
+        if (!rpcErr && rpcData && rpcData.length > 0) {
           setDriverOffers(
-            data.map((q: any) => ({
+            rpcData.map((q: any) => ({
               id: q.id,
               driver_id: q.driver_id,
               amount: Number(q.amount),
@@ -441,9 +441,60 @@ export default function StudentDashboard({ setView }: Props) {
               driver_plate: q.driver_plate || 'Keke Unit',
             }))
           )
+          return
+        }
+
+        // Attempt 2: Direct database query fallback
+        const { data: quotesData, error: quotesErr } = await supabase
+          .from('ride_quotes')
+          .select('id, driver_id, amount')
+          .eq('ride_id', activeRideId)
+          .eq('status', 'pending')
+
+        if (quotesErr) {
+          console.error('[Quotes Table Error]:', quotesErr)
+          return
+        }
+
+        if (quotesData) {
+          const enriched = await Promise.all(
+            quotesData.map(async (q) => {
+              let name = 'Campus Driver'
+              let plate = 'Keke Unit'
+
+              try {
+                const [{ data: dp }, { data: p }] = await Promise.all([
+                  supabase
+                    .from('driver_profiles')
+                    .select('*')
+                    .or(`id.eq.${q.driver_id},user_id.eq.${q.driver_id}`)
+                    .maybeSingle(),
+                  supabase
+                    .from('profiles')
+                    .select('*')
+                    .eq('id', q.driver_id)
+                    .maybeSingle(),
+                ])
+
+                name = dp?.full_name || p?.full_name || dp?.name || p?.name || name
+                plate = dp?.vehicle_plate_number || p?.vehicle_plate_number || dp?.plate_number || p?.plate_number || plate
+              } catch (e) {
+                console.warn('Profile fallback error:', e)
+              }
+
+              return {
+                id: q.id,
+                driver_id: q.driver_id,
+                amount: Number(q.amount),
+                driver_name: name,
+                driver_plate: plate,
+              }
+            })
+          )
+          setDriverOffers(enriched)
         }
       } catch (err) {
-        console.error('Error loading quotes via RPC:', err)
+        console.error('Fatal loadQuotes error:', err)
       }
     }
 
