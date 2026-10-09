@@ -4,6 +4,7 @@ import { type View } from '../App'
 import { useAuth } from '../context/AuthContext'
 import { supabase } from '../lib/supabase'
 import CancelRideModal from '../components/CancelRideModal'
+import RideChatModal from '../components/RideChatModal'
 import NetworkBanner from '../components/NetworkBanner'
 import EmptyState from '../components/EmptyState'
 import { RideHistorySkeleton, HubSelectionSkeleton } from '../components/SkeletonLoader'
@@ -120,6 +121,7 @@ export default function StudentDashboard({ setView }: Props) {
   const [timeLeft, setTimeLeft] = useState<number>(TIMEOUT_SECONDS)
   const [showCancelModal, setShowCancelModal] = useState(false)
   const [isCancelling, setIsCancelling] = useState(false)
+  const [showChatModal, setShowChatModal] = useState(false)
 
   const [historyRides, setHistoryRides] = useState<any[]>([])
   const [loadingHistory, setLoadingHistory] = useState(false)
@@ -429,13 +431,11 @@ export default function StudentDashboard({ setView }: Props) {
     return () => clearInterval(timer)
   }, [phase, activeRideId, rideCreatedAt, timeLeft])
 
-  // Realtime subscription for active ride updates & bulletproof quote loading
   useEffect(() => {
     if (!activeRideId) return
 
     async function loadQuotes() {
       try {
-        // Attempt 1: Fetch via Postgres RPC
         const { data: rpcData, error: rpcErr } = await supabase.rpc('get_ride_quotes_with_drivers', {
           p_ride_id: activeRideId,
         })
@@ -456,7 +456,6 @@ export default function StudentDashboard({ setView }: Props) {
           return
         }
 
-        // Attempt 2: Direct database query fallback
         const { data: quotesData, error: quotesErr } = await supabase
           .from('ride_quotes')
           .select('id, driver_id, amount')
@@ -666,6 +665,7 @@ export default function StudentDashboard({ setView }: Props) {
         .eq('id', activeRideId)
 
       setShowCancelModal(false)
+      setShowChatModal(false)
       setPhase('idle')
       setActiveRideId(null)
       setActiveRideFare(0)
@@ -1054,12 +1054,21 @@ export default function StudentDashboard({ setView }: Props) {
                     <span className="text-xl font-black text-amber-600">₦{dynamicFare}</span>
                   </div>
 
-                  <button
-                    onClick={() => setShowCancelModal(true)}
-                    className="w-full py-2.5 rounded-xl text-xs font-bold border border-neutral-300 text-neutral-600 hover:bg-neutral-50 transition-colors"
-                  >
-                    Cancel Ride
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setShowChatModal(true)}
+                      className="flex-1 py-2.5 rounded-xl text-xs font-bold bg-neutral-900 text-white hover:bg-neutral-800 transition-colors flex items-center justify-center gap-1.5 shadow-sm"
+                    >
+                      <span>💬</span>
+                      <span>Chat with Driver</span>
+                    </button>
+                    <button
+                      onClick={() => setShowCancelModal(true)}
+                      className="flex-1 py-2.5 rounded-xl text-xs font-bold border border-neutral-300 text-neutral-600 hover:bg-neutral-50 transition-colors"
+                    >
+                      Cancel Ride
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
@@ -1084,6 +1093,14 @@ export default function StudentDashboard({ setView }: Props) {
                       {assignedDriver?.name} ({assignedDriver?.plate})
                     </span>
                   </div>
+
+                  <button
+                    onClick={() => setShowChatModal(true)}
+                    className="w-full mb-3 py-2.5 rounded-xl text-xs font-bold bg-neutral-900 text-white hover:bg-neutral-800 transition-colors flex items-center justify-center gap-1.5 shadow-sm"
+                  >
+                    <span>💬</span>
+                    <span>Chat with Driver</span>
+                  </button>
 
                   <p className="text-xs text-neutral-400">Driver will complete trip upon arrival.</p>
                 </div>
@@ -1163,6 +1180,17 @@ export default function StudentDashboard({ setView }: Props) {
         role="rider"
         isSubmitting={isCancelling}
       />
+
+      {activeRideId && user && (
+        <RideChatModal
+          isOpen={showChatModal}
+          onClose={() => setShowChatModal(false)}
+          rideId={activeRideId}
+          currentUserId={user.id}
+          currentUserRole="rider"
+          otherPartyName={assignedDriver?.name || 'Assigned Driver'}
+        />
+      )}
     </div>
   )
 }

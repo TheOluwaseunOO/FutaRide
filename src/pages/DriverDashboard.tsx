@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext'
 import { supabase } from '../lib/supabase'
 import { subscribeDriverToPush } from '../lib/pushNotifications'
 import CancelRideModal from '../components/CancelRideModal'
+import RideChatModal from '../components/RideChatModal'
 import NetworkBanner from '../components/NetworkBanner'
 import EmptyState from '../components/EmptyState'
 import { RideHistorySkeleton } from '../components/SkeletonLoader'
@@ -82,6 +83,7 @@ export default function DriverDashboard({ setView }: Props) {
   const [showCancelModal, setShowCancelModal] = useState(false)
   const [isCancelling, setIsCancelling] = useState(false)
   const [showIosPrompt, setShowIosPrompt] = useState(false)
+  const [showChatModal, setShowChatModal] = useState(false)
 
   const earnings = completedRides.reduce((s, r) => s + r.fare, 0)
   const hour = new Date().getHours()
@@ -484,6 +486,7 @@ export default function DriverDashboard({ setView }: Props) {
   function resetRide() {
     setActiveRide(null)
     setPhase(null)
+    setShowChatModal(false)
   }
 
   async function handleConfirmCancel(reason: string) {
@@ -502,6 +505,7 @@ export default function DriverDashboard({ setView }: Props) {
         .eq('id', activeRide.id)
 
       setShowCancelModal(false)
+      setShowChatModal(false)
       setActiveRide(null)
       setPhase(null)
     } catch (err) {
@@ -691,21 +695,39 @@ export default function DriverDashboard({ setView }: Props) {
                   >
                     Passenger Boarded — Start Ride
                   </button>
-                  <button
-                    onClick={() => setShowCancelModal(true)}
-                    className="w-full py-2.5 rounded-xl text-xs font-bold border border-red-200 text-red-600 hover:bg-red-50 transition-colors"
-                  >
-                    Cancel Ride
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setShowChatModal(true)}
+                      className="flex-1 py-2.5 rounded-xl text-xs font-bold bg-neutral-900 text-white hover:bg-neutral-800 transition-colors flex items-center justify-center gap-1.5 shadow-sm"
+                    >
+                      <span>💬</span>
+                      <span>Chat with Rider</span>
+                    </button>
+                    <button
+                      onClick={() => setShowCancelModal(true)}
+                      className="flex-1 py-2.5 rounded-xl text-xs font-bold border border-red-200 text-red-600 hover:bg-red-50 transition-colors"
+                    >
+                      Cancel Ride
+                    </button>
+                  </div>
                 </div>
               ) : (
-                <button
-                  onClick={completeRide}
-                  className="w-full py-3 sm:py-3.5 rounded-xl font-bold text-xs sm:text-sm text-white hover:opacity-90 active:scale-[0.99] transition-all shadow-sm"
-                  style={{ background: '#1a1a1a' }}
-                >
-                  Complete Ride ✓
-                </button>
+                <div className="space-y-2">
+                  <button
+                    onClick={completeRide}
+                    className="w-full py-3 sm:py-3.5 rounded-xl font-bold text-xs sm:text-sm text-white hover:opacity-90 active:scale-[0.99] transition-all shadow-sm"
+                    style={{ background: '#1a1a1a' }}
+                  >
+                    Complete Ride ✓
+                  </button>
+                  <button
+                    onClick={() => setShowChatModal(true)}
+                    className="w-full py-2.5 rounded-xl text-xs font-bold bg-neutral-100 text-neutral-800 hover:bg-neutral-200 transition-colors flex items-center justify-center gap-1.5"
+                  >
+                    <span>💬</span>
+                    <span>Chat with Rider</span>
+                  </button>
+                </div>
               )}
             </div>
           </div>
@@ -902,6 +924,17 @@ export default function DriverDashboard({ setView }: Props) {
         role="driver"
         isSubmitting={isCancelling}
       />
+
+      {activeRide && user && (
+        <RideChatModal
+          isOpen={showChatModal}
+          onClose={() => setShowChatModal(false)}
+          rideId={activeRide.id}
+          currentUserId={user.id}
+          currentUserRole="driver"
+          otherPartyName={activeRide.rider || 'Passenger'}
+        />
+      )}
     </div>
   )
 }

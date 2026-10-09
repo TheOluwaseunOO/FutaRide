@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { supabase } from '../lib/supabase'
+import AdminManagerModal from '../components/AdminManagerModal'
 
 interface LocationHub {
   id: string
@@ -40,6 +41,10 @@ export default function AdminDashboard() {
   const [errorMsg, setErrorMsg] = useState('')
   const [successMsg, setSuccessMsg] = useState('')
 
+  // Super Admin state & modal
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false)
+  const [showAdminModal, setShowAdminModal] = useState(false)
+
   // New location form state
   const [newLocationName, setNewLocationName] = useState('')
   const [isAddingLocation, setIsAddingLocation] = useState(false)
@@ -61,6 +66,26 @@ export default function AdminDashboard() {
   useEffect(() => {
     fetchData()
   }, [])
+
+  useEffect(() => {
+    if (!user) return
+    async function verifySuperAdminRole() {
+      try {
+        const { data } = await supabase
+          .from('admin_users')
+          .select('is_super_admin')
+          .eq('user_id', user.id)
+          .maybeSingle()
+
+        if (data?.is_super_admin) {
+          setIsSuperAdmin(true)
+        }
+      } catch (err) {
+        console.warn('Super Admin check warning:', err)
+      }
+    }
+    verifySuperAdminRole()
+  }, [user])
 
   function showNotification(msg: string, isError = false) {
     if (isError) {
@@ -120,7 +145,6 @@ export default function AdminDashboard() {
   async function fetchData() {
     setLoading(true)
     try {
-      // 1. Fetch locations
       const { data: locData, error: locErr } = await supabase
         .from('locations')
         .select('*')
@@ -129,7 +153,6 @@ export default function AdminDashboard() {
       if (locErr) throw locErr
       setLocations(locData || [])
 
-      // 2. Fetch routes with joined pickup/dropoff names
       const { data: routeData, error: routeErr } = await supabase
         .from('routes')
         .select(`
@@ -145,7 +168,6 @@ export default function AdminDashboard() {
       if (routeErr) throw routeErr
       setRoutes((routeData as any) || [])
 
-      // 3. Pre-fetch driver records
       await fetchDrivers()
     } catch (err: any) {
       showNotification(err.message || 'Failed to load data', true)
@@ -153,8 +175,6 @@ export default function AdminDashboard() {
       setLoading(false)
     }
   }
-
-  // === LOCATION CRUD ACTIONS ===
 
   async function handleAddLocation(e: React.FormEvent) {
     e.preventDefault()
@@ -222,8 +242,6 @@ export default function AdminDashboard() {
       showNotification(err.message || 'Error deleting location', true)
     }
   }
-
-  // === ROUTE FARE CRUD ACTIONS ===
 
   async function handleAddRoute(e: React.FormEvent) {
     e.preventDefault()
@@ -323,8 +341,6 @@ export default function AdminDashboard() {
     }
   }
 
-  // === DRIVER VERIFICATION ACTIONS ===
-
   async function handleUpdateDriverStatus(driverId: string, newStatus: 'verified' | 'suspended') {
     try {
       await Promise.all([
@@ -351,7 +367,17 @@ export default function AdminDashboard() {
             Admin Portal
           </span>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3 sm:gap-4">
+          {isSuperAdmin && (
+            <button
+              onClick={() => setShowAdminModal(true)}
+              className="text-xs font-bold px-3 py-1.5 rounded-xl bg-amber-500 text-white hover:bg-amber-600 transition-colors shadow-sm flex items-center gap-1.5 active:scale-95"
+            >
+              <span>⚙️</span>
+              <span>Team & Rights</span>
+            </button>
+          )}
+
           <span className="text-xs text-neutral-500 hidden sm:inline">
             Logged in as <strong className="text-neutral-900">{profile?.full_name || user?.email}</strong>
           </span>
@@ -717,6 +743,11 @@ export default function AdminDashboard() {
           </div>
         )}
       </main>
+
+      <AdminManagerModal
+        isOpen={showAdminModal}
+        onClose={() => setShowAdminModal(false)}
+      />
     </div>
   )
 }
