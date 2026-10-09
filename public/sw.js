@@ -1,6 +1,5 @@
 // public/sw.js
 
-// Ensure the service worker takes control immediately upon activation
 self.addEventListener('install', (event) => {
   self.skipWaiting()
 })
@@ -22,17 +21,29 @@ self.addEventListener('push', (event) => {
     }
   }
 
+  const rideId = data.rideId || data.record?.id || 'ride-alert'
+  const tag = `ride-${rideId}`
+
+  // 1. If another driver claimed the ride or it was cancelled, dismiss the notification
+  if (data.action === 'dismiss' || data.status === 'accepted' || data.status === 'cancelled') {
+    event.waitUntil(
+      self.registration.getNotifications({ tag }).then((notifications) => {
+        notifications.forEach((notification) => notification.close())
+      })
+    )
+    return
+  }
+
+  // 2. Otherwise display new ride notification
   const title = data.title || '🛺 New Ride Request!'
   const body = data.body || data.message || 'A new student ride is available in the queue.'
-  const rideId = data.rideId || 'ride-alert'
 
   const options = {
     body,
     icon: '/logo.png',
     badge: '/logo.png',
-    // Strong alert pattern: 300ms buzz, 100ms pause, 400ms buzz, 100ms pause, 400ms buzz
     vibrate: [300, 100, 400, 100, 400],
-    tag: `ride-${rideId}`,
+    tag,
     renotify: true,
     requireInteraction: true,
     data: {
@@ -40,7 +51,7 @@ self.addEventListener('push', (event) => {
       rideId,
     },
     actions: [
-      { action: 'view', title: 'View Ride' },
+      { action: 'view', title: '👀 View Ride' },
     ],
   }
 
@@ -53,13 +64,11 @@ self.addEventListener('notificationclick', (event) => {
 
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
-      // 1. Focus an existing driver window or tab if already open
       for (const client of windowClients) {
         if (client.url.includes('/driver') && 'focus' in client) {
           return client.focus()
         }
       }
-      // 2. Otherwise open the driver dashboard in a new tab/window
       if (clients.openWindow) {
         return clients.openWindow(targetUrl)
       }

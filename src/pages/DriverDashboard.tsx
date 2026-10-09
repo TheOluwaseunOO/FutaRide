@@ -72,6 +72,9 @@ export default function DriverDashboard({ setView }: Props) {
   const [claimError, setClaimError] = useState<string>('')
   const [driverQuoteInputs, setDriverQuoteInputs] = useState<Record<string, string>>({})
 
+  // Prevents background polling from rolling back local phase mutations
+  const isTransitioningRef = useRef(false)
+
   // Notifications State
   const [showNotifications, setShowNotifications] = useState(false)
   const [notifications, setNotifications] = useState<DriverNotification[]>([])
@@ -272,9 +275,9 @@ export default function DriverDashboard({ setView }: Props) {
     }
   }, [user])
 
-  // Restore active ongoing trip seamlessly
+  // Restore active ongoing trip with backward-jump guard
   const restoreActiveRide = useCallback(async () => {
-    if (!user) return
+    if (!user || isTransitioningRef.current) return
 
     try {
       const { data: ongoingRide } = await supabase
@@ -289,9 +292,10 @@ export default function DriverDashboard({ setView }: Props) {
       if (ongoingRide) {
         const item = await transformDbRide(ongoingRide)
         setActiveRide(item)
-        setPhase(ongoingRide.status === 'accepted' ? 'arriving' : 'in_progress')
+        const dbPhase: Phase = ongoingRide.status === 'accepted' ? 'arriving' : 'in_progress'
+        setPhase((prev) => (prev === 'in_progress' && dbPhase === 'arriving' ? prev : dbPhase))
       } else {
-        if (phase === 'arriving' || phase === 'in_progress') {
+        if (!isTransitioningRef.current && (phase === 'arriving' || phase === 'in_progress')) {
           setActiveRide(null)
           setPhase(null)
         }
@@ -412,7 +416,7 @@ export default function DriverDashboard({ setView }: Props) {
     }
   }, [online, verificationStatus, loadInitialQueue])
 
-  // Seamless wait time counter without flashing ride metadata
+  // Wait time counter
   useEffect(() => {
     if (!online || pendingQueue.length === 0) return
 
@@ -451,13 +455,12 @@ export default function DriverDashboard({ setView }: Props) {
     }
   }
 
-  // 1. Send quote (Immediate optimistic update prevents UI flashing)
+  // 1. Send quote (Immediate optimistic update)
   async function handleSendQuote(rideId: string) {
     if (!user || verificationStatus === 'suspended') return
     const quoteVal = Number(driverQuoteInputs[rideId])
     if (!quoteVal || quoteVal <= 0) return
 
-    // Optimistically update local queue state immediately
     setPendingQueue((prev) =>
       prev.map((r) =>
         r.id === rideId
@@ -481,12 +484,11 @@ export default function DriverDashboard({ setView }: Props) {
     }
   }
 
-  // 2. Reject countered price (Optimistic reset to prevent state delay)
+  // 2. Reject countered price
   async function handleRejectCounter(rideId: string) {
     if (!user) return
     setClaimError('')
 
-    // Immediately clear local quote for instant transition
     setPendingQueue((prev) =>
       prev.map((r) =>
         r.id === rideId
@@ -523,7 +525,7 @@ export default function DriverDashboard({ setView }: Props) {
     if (!user || verificationStatus === 'suspended') return
     const finalFare = Number(ride.fareQuote || ride.fare)
 
-    // Instant optimistic transition
+    isTransitioningRef.current = true
     setActiveRide({ ...ride, fare: finalFare })
     setPhase('arriving')
     setPendingQueue((prev) => prev.filter((r) => r.id !== ride.id))
@@ -533,6 +535,10 @@ export default function DriverDashboard({ setView }: Props) {
       p_driver_id: user.id,
       p_agreed_fare: finalFare,
     })
+
+    setTimeout(() => {
+      isTransitioningRef.current = false
+    }, 1500)
 
     if (error || !data?.success) {
       setClaimError(data?.message || error?.message || 'Failed to claim ride.')
@@ -555,7 +561,7 @@ export default function DriverDashboard({ setView }: Props) {
     }
     setClaimError('')
 
-    // Optimistic instantaneous switch
+    isTransitioningRef.current = true
     setActiveRide(ride)
     setPhase('arriving')
     setPendingQueue((prev) => prev.filter((r) => r.id !== ride.id))
@@ -573,6 +579,10 @@ export default function DriverDashboard({ setView }: Props) {
         p_ride_id: ride.id,
         p_driver_id: targetDriverId,
       })
+
+      setTimeout(() => {
+        isTransitioningRef.current = false
+      }, 1500)
 
       if (error) throw error
 
@@ -593,14 +603,42 @@ export default function DriverDashboard({ setView }: Props) {
 
   async function startRide() {
     if (!activeRide) return
+    isTransitioningRef.current = true
     setPhase('in_progress')
-    await supabase.from('rides').update({ status: 'in_progress', pickup_time: new Date().toISOString() }).eq('id', activeRide.id)
+
+    const { error } = await supabase
+      .from('rides')
+      .update({ status: 'in_progress', pickup_time: new Date().toISOString() })
+      .eq('id', activeRide.id)
+
+    setTimeout(() => {
+      isTransitioningRef.current = false
+    }, 1500)
+
+    if (error) {
+      setClaimError('Failed to update ride status.')
+      restoreActiveRide()
+    }
   }
 
   async function completeRide() {
     if (!activeRide) return
+    isTransitioningRef.current = true
     setPhase('completed')
-    await supabase.from('rides').update({ status: 'completed', completed_time: new Date().toISOString() }).eq('id', activeRide.id)
+
+    const { error } = await supabase
+      .from('rides')
+      .update({ status: 'completed', completed_time: new Date().toISOString() })
+      .eq('id', activeRide.id)
+
+    setTimeout(() => {
+      isTransitioningRef.current = false
+    }, 1500)
+
+    if (error) {
+      setClaimError('Failed to complete ride.')
+      restoreActiveRide()
+    }
   }
 
   function resetRide() {
@@ -948,7 +986,6 @@ export default function DriverDashboard({ setView }: Props) {
               </div>
             ) : (
               pendingQueue.map((ride) => {
-                // Strict check: Negotiable only when there is NO fixed locked fare
                 const isNegotiableRide = !ride.fare || ride.fare <= 0
                 const isMyQuote = ride.quotedDriverId === user?.id
                 const isBeingNegotiatedByOther = Boolean(ride.quotedDriverId && !isMyQuote)
