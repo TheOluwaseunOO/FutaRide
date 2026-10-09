@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { Routes, Route, Navigate, useNavigate } from 'react-router-dom'
 import Landing from './pages/Landing'
 import AuthPage from './pages/AuthPage'
@@ -21,7 +20,6 @@ export type View =
 
 export default function App() {
   const navigate = useNavigate()
-  const [adminAuthed, setAdminAuthed] = useState(false)
 
   function handleSetView(v: View) {
     if (v === 'landing') navigate('/')
@@ -33,16 +31,6 @@ export default function App() {
     else if (v === 'admin') navigate('/admin')
   }
 
-  function handleAdminAuth() {
-    setAdminAuthed(true)
-    navigate('/admin')
-  }
-
-  function handleAdminSignOut() {
-    setAdminAuthed(false)
-    navigate('/')
-  }
-
   return (
     <div className="min-h-screen" style={{ background: '#fff', fontFamily: 'Inter, sans-serif' }}>
       <Routes>
@@ -52,12 +40,12 @@ export default function App() {
           element={
             <Landing
               setView={handleSetView}
-              goAdmin={() => navigate(adminAuthed ? '/admin' : '/admin-login')}
+              goAdmin={() => navigate('/admin')}
             />
           }
         />
 
-        {/* Public-only Auth Pages (redirects to appropriate portal if already authenticated) */}
+        {/* Public-only Auth Pages */}
         <Route
           path="/auth"
           element={
@@ -103,7 +91,7 @@ export default function App() {
           }
         />
 
-        {/* Protected Rider Portal - permits both 'rider' and legacy 'student' */}
+        {/* Protected Rider Portal */}
         <Route
           path="/rider"
           element={
@@ -117,7 +105,7 @@ export default function App() {
           element={<Navigate to="/rider" replace />}
         />
 
-        {/* Protected Driver Portal - strictly role guarded */}
+        {/* Protected Driver Portal */}
         <Route
           path="/driver"
           element={
@@ -130,16 +118,14 @@ export default function App() {
         {/* Admin Console */}
         <Route
           path="/admin-login"
-          element={<AdminLogin onAuth={handleAdminAuth} setView={handleSetView} />}
+          element={<AdminLogin setView={handleSetView} />}
         />
         <Route
           path="/admin"
           element={
-            adminAuthed ? (
-              <AdminDashboard setView={handleSetView} onSignOut={handleAdminSignOut} />
-            ) : (
-              <Navigate to="/admin-login" replace />
-            )
+            <RoleGuard allowedRoles={['admin']}>
+              <AdminDashboard />
+            </RoleGuard>
           }
         />
 
