@@ -113,7 +113,9 @@ export default function StudentDashboard({ setView }: Props) {
   const [driverOffers, setDriverOffers] = useState<DriverOffer[]>([])
   const [requestError, setRequestError] = useState<string>('')
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [phase, setPhase] = useState<Phase>(null as any) || useState<Phase>('idle')
+  
+  // Clean initialization directly to 'idle'
+  const [phase, setPhase] = useState<Phase>('idle')
   const [tab, setTab] = useState<'book' | 'history'>('book')
 
   const [timeLeft, setTimeLeft] = useState<number>(TIMEOUT_SECONDS)
@@ -208,11 +210,14 @@ export default function StudentDashboard({ setView }: Props) {
 
           if (lastRide?.status === 'completed') setPhase('completed')
           else if (lastRide?.status === 'expired') setPhase('expired')
-          else if (lastRide?.status === 'cancelled') handleResetAfterExpired()
+          else handleResetAfterExpired()
+        } else if (!phase) {
+          setPhase('idle')
         }
       }
     } catch (err) {
       console.error('Error restoring rider session:', err)
+      setPhase('idle')
     }
   }, [user, phase])
 
@@ -416,7 +421,7 @@ export default function StudentDashboard({ setView }: Props) {
     return () => clearInterval(timer)
   }, [phase, activeRideId, rideCreatedAt, timeLeft])
 
-  // Realtime subscription for active ride updates & robust multi-driver quote resolution
+  // Realtime subscription for active ride updates & multi-driver quotes
   useEffect(() => {
     if (!activeRideId) return
 
