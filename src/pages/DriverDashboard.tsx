@@ -88,6 +88,20 @@ export default function DriverDashboard({ setView }: Props) {
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
 
+  // Helper for notification dot color
+  function getNotificationBadgeColor(type: DriverNotification['type']) {
+    switch (type) {
+      case 'error':
+        return 'bg-red-500'
+      case 'success':
+        return 'bg-emerald-500'
+      case 'warning':
+        return 'bg-amber-500'
+      default:
+        return 'bg-blue-500'
+    }
+  }
+
   // Detect iOS Safari standalone mode
   useEffect(() => {
     const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream
@@ -486,7 +500,6 @@ export default function DriverDashboard({ setView }: Props) {
     })
 
     if (error || !data?.success) {
-      // Fallback direct update
       await supabase
         .from('rides')
         .update({
@@ -671,14 +684,7 @@ export default function DriverDashboard({ setView }: Props) {
                   {notifications.map((n) => (
                     <div key={n.id} className="p-3.5 hover:bg-neutral-50 transition-colors flex items-start gap-3">
                       <span
-                        className={`w-2.5 h-2.5 rounded-full mt-1 flex-shrink-0 ${
-                          n.type === 'error'
-                            ? 'bg-red-500'
-                            : n.type === 'success'
-                            : n.type === 'warning'
-                            : 'bg-amber-500'
-                            : 'bg-blue-500'
-                        }`}
+                        className={`w-2.5 h-2.5 rounded-full mt-1 flex-shrink-0 ${getNotificationBadgeColor(n.type)}`}
                       />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between gap-1">
