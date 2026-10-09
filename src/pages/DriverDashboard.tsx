@@ -21,9 +21,8 @@ interface QueueRide {
   sec: number
   customPickup?: string | null
   customDropoff?: string | null
-  fareQuote?: number | null
-  quoteStatus?: string
-  quotedDriverId?: string | null
+  driverId?: string | null
+  status?: string
 }
 
 interface CompletedRide {
@@ -70,9 +69,12 @@ export default function DriverDashboard({ setView }: Props) {
   const [phase, setPhase] = useState<Phase>(null)
   const [tab, setTab] = useState<'queue' | 'history'>('queue')
   const [claimError, setClaimError] = useState<string>('')
+  
+  // Per-driver individual quotes mapped by ride_id
   const [driverQuoteInputs, setDriverQuoteInputs] = useState<Record<string, string>>({})
+  const [submittedQuotes, setSubmittedQuotes] = useState<Record<string, number>>({})
 
-  // Prevents background polling from rolling back local phase mutations
+  // Transition guard to eliminate UI phase rollback
   const isTransitioningRef = useRef(false)
 
   // Notifications State
@@ -83,8 +85,6 @@ export default function DriverDashboard({ setView }: Props) {
   // Cancellation Modal State
   const [showCancelModal, setShowCancelModal] = useState(false)
   const [isCancelling, setIsCancelling] = useState(false)
-
-  // iOS PWA Detection
   const [showIosPrompt, setShowIosPrompt] = useState(false)
 
   const earnings = completedRides.reduce((s, r) => s + r.fare, 0)
@@ -104,19 +104,32 @@ export default function DriverDashboard({ setView }: Props) {
   useEffect(() => {
     const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream
     const isStandalone = window.matchMedia('(display-mode: standalone)').matches || (navigator as any).standalone === true
-    if (isIOS && !isStandalone) {
-      setShowIosPrompt(true)
-    }
+    if (isIOS && !isStandalone) setShowIosPrompt(true)
   }, [])
 
   // Universal Push Registration
   useEffect(() => {
     if (user?.id && online && verificationStatus !== 'suspended') {
-      subscribeDriverToPush(user.id).catch((err) => {
-        console.warn('Driver device push registration skipped or denied:', err)
-      })
+      subscribeDriverToPush(user.id).catch(console.warn)
     }
   }, [user?.id, online, verificationStatus])
+
+  // Load quotes submitted by this current driver
+  useEffect(() => {
+    if (!user) return
+    async function loadMyQuotes() {
+      const { data } = await supabase
+        .from('ride_quotes')
+        .select('ride_id, amount')
+        .eq('driver_id', user!.id)
+      if (data) {
+        const map: Record<string, number> = {}
+        data.forEach(q => { map[q.ride_id] = Number(q.amount) })
+        setSubmittedQuotes(map)
+      }
+    }
+    loadMyQuotes()
+  }, [user])
 
   // Click outside to dismiss notification dropdown
   useEffect(() => {
@@ -129,7 +142,7 @@ export default function DriverDashboard({ setView }: Props) {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  // Manage notifications list
+  // Internal notifications list based on status
   useEffect(() => {
     const list: DriverNotification[] = [
       {
@@ -160,21 +173,11 @@ export default function DriverDashboard({ setView }: Props) {
         time: 'Urgent',
         unread: true,
       })
-    } else if (verificationStatus === 'pending') {
-      list.unshift({
-        id: 'pending',
-        title: 'Verification In Progress',
-        message: 'Your driver account is undergoing automatic review.',
-        type: 'warning',
-        time: 'Pending',
-        unread: true,
-      })
     }
-
     setNotifications(list)
   }, [verificationStatus])
 
-  // Helper: Map database row safely
+  // Map database row safely
   async function transformDbRide(rideRow: any): Promise<QueueRide> {
     let fromName = rideRow.custom_pickup || ''
     let toName = rideRow.custom_dropoff || ''
@@ -215,7 +218,7 @@ export default function DriverDashboard({ setView }: Props) {
           dept = stProfile.department || undefined
         }
       } catch (err) {
-        console.warn('Could not fetch rider profile:', err)
+        console.warn('Could not fetch profile:', err)
       }
     }
 
@@ -233,49 +236,25 @@ export default function DriverDashboard({ setView }: Props) {
       sec: elapsedSeconds,
       customPickup: rideRow.custom_pickup,
       customDropoff: rideRow.custom_dropoff,
-      fareQuote: rideRow.fare_quote ? Number(rideRow.fare_quote) : null,
-      quoteStatus: rideRow.quote_status || 'none',
-      quotedDriverId: rideRow.quoted_driver_id || null,
+      driverId: rideRow.driver_id || null,
+      status: rideRow.status,
     }
   }
 
-  // Verification status check & real-time changes
+  // Verification status check
   useEffect(() => {
     if (!user) return
-
     async function checkVerification() {
       const { data: dp } = await supabase.from('driver_profiles').select('verification_status').eq('id', user!.id).maybeSingle()
       const { data: p } = await supabase.from('profiles').select('verification_status').eq('id', user!.id).maybeSingle()
-
       const status = dp?.verification_status || p?.verification_status || 'verified'
       setVerificationStatus(status)
       if (status === 'suspended') setOnline(false)
     }
-
     checkVerification()
-
-    const statusChannel = supabase
-      .channel(`driver-status-${user.id}`)
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'driver_profiles', filter: `id=eq.${user.id}` }, (payload: any) => {
-        if (payload.new?.verification_status) {
-          setVerificationStatus(payload.new.verification_status)
-          if (payload.new.verification_status === 'suspended') setOnline(false)
-        }
-      })
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `id=eq.${user.id}` }, (payload: any) => {
-        if (payload.new?.verification_status) {
-          setVerificationStatus(payload.new.verification_status)
-          if (payload.new.verification_status === 'suspended') setOnline(false)
-        }
-      })
-      .subscribe()
-
-    return () => {
-      supabase.removeChannel(statusChannel)
-    }
   }, [user])
 
-  // Restore active ongoing trip with backward-jump guard
+  // Restore active ongoing trip with transition protection
   const restoreActiveRide = useCallback(async () => {
     if (!user || isTransitioningRef.current) return
 
@@ -301,7 +280,7 @@ export default function DriverDashboard({ setView }: Props) {
         }
       }
     } catch (err) {
-      console.error('Failed restoring active trip:', err)
+      console.error('Restore error:', err)
     }
   }, [user, phase])
 
@@ -309,12 +288,11 @@ export default function DriverDashboard({ setView }: Props) {
     restoreActiveRide()
   }, [restoreActiveRide])
 
-  // Fetch completed rides
+  // Fetch completed rides for today
   useEffect(() => {
     async function loadCompletedRides() {
       if (!user) return
       setLoadingHistory(true)
-
       try {
         const todayStart = new Date()
         todayStart.setHours(0, 0, 0, 0)
@@ -328,29 +306,27 @@ export default function DriverDashboard({ setView }: Props) {
           .order('completed_time', { ascending: false })
 
         if (data) {
-          const historyItems: CompletedRide[] = await Promise.all(
+          const items: CompletedRide[] = await Promise.all(
             data.map(async (row) => {
-              const transformed = await transformDbRide(row)
-              const timeStr = row.completed_time
-                ? new Date(row.completed_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                : 'Earlier'
+              const tr = await transformDbRide(row)
               return {
                 id: row.id,
-                from: transformed.from,
-                to: transformed.to,
-                fare: transformed.fare,
-                rider: transformed.rider,
-                time: timeStr,
+                from: tr.from,
+                to: tr.to,
+                fare: tr.fare,
+                rider: tr.rider,
+                time: row.completed_time
+                  ? new Date(row.completed_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                  : 'Earlier',
               }
             })
           )
-          setCompletedRides(historyItems)
+          setCompletedRides(items)
         }
       } finally {
         setLoadingHistory(false)
       }
     }
-
     loadCompletedRides()
   }, [user, phase])
 
@@ -373,10 +349,9 @@ export default function DriverDashboard({ setView }: Props) {
     }
   }, [online, verificationStatus])
 
-  // Realtime queue listener & smooth synchronization
+  // Realtime queue listener & instant multi-driver claimed notifications
   useEffect(() => {
     loadInitialQueue()
-
     if (!online || verificationStatus === 'suspended') return
 
     const channel = supabase
@@ -395,15 +370,27 @@ export default function DriverDashboard({ setView }: Props) {
           }
         } else if (payload.eventType === 'UPDATE') {
           const updatedRow = payload.new
-          if (updatedRow.status !== 'requested') {
+
+          // If accepted by ME, immediately promote to active trip
+          if (updatedRow.status === 'accepted' && updatedRow.driver_id === user?.id) {
+            const myTrip = await transformDbRide(updatedRow)
+            setActiveRide(myTrip)
+            setPhase('arriving')
+            setPendingQueue((prev) => prev.filter((r) => r.id !== updatedRow.id))
+            return
+          }
+
+          // If accepted by ANOTHER driver, show instant claimed banner and remove
+          if (updatedRow.status === 'accepted' && updatedRow.driver_id !== user?.id) {
+            setPendingQueue((prev) => prev.map((r) => (r.id === updatedRow.id ? { ...r, status: 'claimed' } : r)))
+            setTimeout(() => {
+              setPendingQueue((prev) => prev.filter((r) => r.id !== updatedRow.id))
+            }, 3000)
+          } else if (updatedRow.status !== 'requested') {
             setPendingQueue((prev) => prev.filter((r) => r.id !== updatedRow.id))
           } else {
             const item = await transformDbRide(updatedRow)
-            if (item.sec >= TIMEOUT_SECONDS) {
-              setPendingQueue((prev) => prev.filter((r) => r.id !== item.id))
-            } else {
-              setPendingQueue((prev) => prev.map((r) => (r.id === item.id ? item : r)))
-            }
+            setPendingQueue((prev) => prev.map((r) => (r.id === item.id ? item : r)))
           }
         } else if (payload.eventType === 'DELETE') {
           setPendingQueue((prev) => prev.filter((r) => r.id !== payload.old.id))
@@ -414,12 +401,11 @@ export default function DriverDashboard({ setView }: Props) {
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [online, verificationStatus, loadInitialQueue])
+  }, [online, verificationStatus, user?.id, loadInitialQueue])
 
-  // Wait time counter
+  // Queue elapsed seconds timer
   useEffect(() => {
     if (!online || pendingQueue.length === 0) return
-
     const interval = setInterval(() => {
       setPendingQueue((prev) =>
         prev
@@ -430,171 +416,69 @@ export default function DriverDashboard({ setView }: Props) {
           .filter((r) => r.sec < TIMEOUT_SECONDS)
       )
     }, 1000)
-
     return () => clearInterval(interval)
   }, [online, pendingQueue.length])
 
-  const handleNetworkReconnect = useCallback(() => {
-    restoreActiveRide()
-    loadInitialQueue()
-  }, [restoreActiveRide, loadInitialQueue])
-
   async function handleToggleOnline() {
-    if (verificationStatus === 'suspended') {
-      setClaimError('Your account has been suspended by administration. You cannot go online.')
-      return
-    }
-    setClaimError('')
-    const nextState = !online
-    setOnline(nextState)
-
-    if (nextState && user?.id) {
-      subscribeDriverToPush(user.id).catch((err) => {
-        console.warn('Could not register device push on toggle:', err)
-      })
-    }
+    if (verificationStatus === 'suspended') return
+    const next = !online
+    setOnline(next)
+    if (next && user?.id) subscribeDriverToPush(user.id).catch(console.warn)
   }
 
-  // 1. Send quote (Immediate optimistic update)
+  // Multi-driver quoting: saves directly to ride_quotes table
   async function handleSendQuote(rideId: string) {
     if (!user || verificationStatus === 'suspended') return
     const quoteVal = Number(driverQuoteInputs[rideId])
     if (!quoteVal || quoteVal <= 0) return
 
-    setPendingQueue((prev) =>
-      prev.map((r) =>
-        r.id === rideId
-          ? { ...r, fareQuote: quoteVal, quoteStatus: 'quoted', quotedDriverId: user.id }
-          : r
-      )
-    )
+    setSubmittedQuotes((prev) => ({ ...prev, [rideId]: quoteVal }))
 
     const { error } = await supabase
-      .from('rides')
-      .update({
-        fare_quote: quoteVal,
-        quote_status: 'quoted',
-        quoted_driver_id: user.id,
-      })
-      .eq('id', rideId)
+      .from('ride_quotes')
+      .upsert(
+        {
+          ride_id: rideId,
+          driver_id: user.id,
+          amount: quoteVal,
+          status: 'pending',
+        },
+        { onConflict: 'ride_id,driver_id' }
+      )
 
     if (error) {
       setClaimError(error.message || 'Failed to submit quote.')
-      loadInitialQueue()
+      setSubmittedQuotes((prev) => {
+        const copy = { ...prev }
+        delete copy[rideId]
+        return copy
+      })
     }
   }
 
-  // 2. Reject countered price
-  async function handleRejectCounter(rideId: string) {
-    if (!user) return
-    setClaimError('')
-
-    setPendingQueue((prev) =>
-      prev.map((r) =>
-        r.id === rideId
-          ? { ...r, fareQuote: null, quoteStatus: 'none', quotedDriverId: null }
-          : r
-      )
-    )
-
-    setDriverQuoteInputs((prev) => {
-      const next = { ...prev }
-      delete next[rideId]
-      return next
-    })
-
-    const { data, error } = await supabase.rpc('reject_ride_counter', {
-      p_ride_id: rideId,
-      p_driver_id: user.id,
-    })
-
-    if (error || !data?.success) {
-      await supabase
-        .from('rides')
-        .update({
-          fare_quote: null,
-          quote_status: 'none',
-          quoted_driver_id: null,
-        })
-        .eq('id', rideId)
-    }
-  }
-
-  // 3. Accept agreed counter or custom ride
-  async function handleAcceptOffcampusAgreed(ride: QueueRide) {
-    if (!user || verificationStatus === 'suspended') return
-    const finalFare = Number(ride.fareQuote || ride.fare)
-
-    isTransitioningRef.current = true
-    setActiveRide({ ...ride, fare: finalFare })
-    setPhase('arriving')
-    setPendingQueue((prev) => prev.filter((r) => r.id !== ride.id))
-
-    const { data, error } = await supabase.rpc('confirm_offcampus_ride', {
-      p_ride_id: ride.id,
-      p_driver_id: user.id,
-      p_agreed_fare: finalFare,
-    })
-
-    setTimeout(() => {
-      isTransitioningRef.current = false
-    }, 1500)
-
-    if (error || !data?.success) {
-      setClaimError(data?.message || error?.message || 'Failed to claim ride.')
-      setActiveRide(null)
-      setPhase(null)
-      loadInitialQueue()
-    }
-  }
-
-  // 4. Accept standard fixed-fare ride
+  // Accept a standard fixed-fare ride
   async function accept(ride: QueueRide) {
     if (!user) return
-    if (!navigator.onLine) {
-      setClaimError('You appear to be offline. Reconnecting to network...')
-      return
-    }
-    if (verificationStatus === 'suspended') {
-      setClaimError('Your account is suspended. You cannot accept rides.')
-      return
-    }
-    setClaimError('')
-
     isTransitioningRef.current = true
     setActiveRide(ride)
     setPhase('arriving')
     setPendingQueue((prev) => prev.filter((r) => r.id !== ride.id))
 
     try {
-      let targetDriverId = user.id
-      const { data: driverProf } = await supabase.from('driver_profiles').select('id').eq('id', user.id).maybeSingle()
-
-      if (!driverProf) {
-        const { data: anyDriver } = await supabase.from('driver_profiles').select('id').limit(1).maybeSingle()
-        if (anyDriver) targetDriverId = anyDriver.id
-      }
-
       const { data, error } = await supabase.rpc('claim_ride', {
         p_ride_id: ride.id,
-        p_driver_id: targetDriverId,
+        p_driver_id: user.id,
       })
 
-      setTimeout(() => {
-        isTransitioningRef.current = false
-      }, 1500)
-
-      if (error) throw error
-
-      if (!data.success) {
-        setClaimError(data.message || 'Ride already claimed by another driver.')
+      setTimeout(() => { isTransitioningRef.current = false }, 1500)
+      if (error || !data?.success) {
+        setClaimError(data?.message || 'Ride already claimed by another driver.')
         setActiveRide(null)
         setPhase(null)
         loadInitialQueue()
       }
     } catch (err: any) {
-      console.error('Claim error:', err)
-      setClaimError(err?.message || 'Failed to claim ride. Check network connection.')
+      setClaimError(err?.message || 'Failed to claim ride.')
       setActiveRide(null)
       setPhase(null)
       loadInitialQueue()
@@ -605,40 +489,16 @@ export default function DriverDashboard({ setView }: Props) {
     if (!activeRide) return
     isTransitioningRef.current = true
     setPhase('in_progress')
-
-    const { error } = await supabase
-      .from('rides')
-      .update({ status: 'in_progress', pickup_time: new Date().toISOString() })
-      .eq('id', activeRide.id)
-
-    setTimeout(() => {
-      isTransitioningRef.current = false
-    }, 1500)
-
-    if (error) {
-      setClaimError('Failed to update ride status.')
-      restoreActiveRide()
-    }
+    await supabase.from('rides').update({ status: 'in_progress', pickup_time: new Date().toISOString() }).eq('id', activeRide.id)
+    setTimeout(() => { isTransitioningRef.current = false }, 1500)
   }
 
   async function completeRide() {
     if (!activeRide) return
     isTransitioningRef.current = true
     setPhase('completed')
-
-    const { error } = await supabase
-      .from('rides')
-      .update({ status: 'completed', completed_time: new Date().toISOString() })
-      .eq('id', activeRide.id)
-
-    setTimeout(() => {
-      isTransitioningRef.current = false
-    }, 1500)
-
-    if (error) {
-      setClaimError('Failed to complete ride.')
-      restoreActiveRide()
-    }
+    await supabase.from('rides').update({ status: 'completed', completed_time: new Date().toISOString() }).eq('id', activeRide.id)
+    setTimeout(() => { isTransitioningRef.current = false }, 1500)
   }
 
   function resetRide() {
@@ -673,14 +533,11 @@ export default function DriverDashboard({ setView }: Props) {
 
   return (
     <div className="min-h-screen flex flex-col font-sans pb-12 sm:pb-8" style={{ background: '#f7f7f7' }}>
-      <NetworkBanner onReconnect={handleNetworkReconnect} />
+      <NetworkBanner onReconnect={() => { restoreActiveRide(); loadInitialQueue(); }} />
 
       {/* Top Header */}
       <header className="sticky top-0 z-40 flex items-center justify-between px-4 sm:px-8 h-14 sm:h-16 bg-white/95 backdrop-blur border-b border-neutral-200">
-        <button
-          onClick={() => { if (setView) setView('landing'); navigate('/') }}
-          className="active:scale-95 transition-transform"
-        >
+        <button onClick={() => { if (setView) setView('landing'); navigate('/') }}>
           <img src="/logo.png" alt="FutaRide" className="h-6 sm:h-7 w-auto" />
         </button>
 
@@ -696,10 +553,7 @@ export default function DriverDashboard({ setView }: Props) {
             <button
               onClick={handleToggleOnline}
               disabled={verificationStatus === 'suspended'}
-              title={verificationStatus === 'suspended' ? 'Account suspended' : 'Toggle online'}
-              className={`relative w-11 sm:w-12 h-6 rounded-full transition-colors active:scale-95 ${
-                verificationStatus === 'suspended' ? 'opacity-40 cursor-not-allowed' : ''
-              }`}
+              className="relative w-11 sm:w-12 h-6 rounded-full transition-colors active:scale-95"
               style={{ background: online && verificationStatus !== 'suspended' ? '#E6900E' : '#d4d4d4' }}
             >
               <span
@@ -757,13 +611,8 @@ export default function DriverDashboard({ setView }: Props) {
           </div>
 
           <button
-            onClick={async () => {
-              await signOut()
-              if (setView) setView('landing')
-              navigate('/')
-            }}
-            title="Sign Out"
-            className="text-xs font-semibold px-2.5 py-1.5 rounded-lg border border-neutral-200 text-neutral-600 hover:bg-neutral-100 transition-colors"
+            onClick={async () => { await signOut(); if (setView) setView('landing'); navigate('/') }}
+            className="text-xs font-semibold px-2.5 py-1.5 rounded-lg border border-neutral-200 text-neutral-600 hover:bg-neutral-100"
           >
             Sign Out
           </button>
@@ -788,47 +637,17 @@ export default function DriverDashboard({ setView }: Props) {
 
       {/* Main Container */}
       <div className="flex-1 max-w-lg mx-auto w-full px-4 sm:px-0 py-5 sm:py-6">
-        {/* iOS PWA Installation Notice */}
+        {/* iOS Notice */}
         {showIosPrompt && (
           <div className="mb-4 p-3.5 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-start gap-2.5 shadow-sm">
             <span className="text-base flex-shrink-0 mt-0.5">📲</span>
             <div className="flex-1 min-w-0">
               <p className="font-bold">Using an iPhone?</p>
               <p className="text-[11px] text-amber-800 mt-0.5 leading-relaxed">
-                To receive ride alerts while your screen is locked, tap <strong>Share</strong> at the bottom of Safari, then choose <strong>"Add to Home Screen"</strong>.
+                To receive ride alerts while your screen is locked, tap <strong>Share</strong> and choose <strong>"Add to Home Screen"</strong>.
               </p>
             </div>
-            <button
-              onClick={() => setShowIosPrompt(false)}
-              className="text-amber-500 font-bold hover:text-amber-800 text-xs px-1"
-            >
-              ✕
-            </button>
-          </div>
-        )}
-
-        {/* Verification Status Warnings */}
-        {verificationStatus === 'suspended' && (
-          <div className="mb-4 sm:mb-5 p-4 rounded-2xl bg-red-50 border border-red-200 text-xs text-red-700 flex items-start gap-3 shadow-sm">
-            <span className="w-5 h-5 rounded-full bg-red-500 text-white font-bold flex items-center justify-center flex-shrink-0 mt-0.5">✕</span>
-            <div>
-              <p className="font-bold text-red-900">Driver Account Suspended</p>
-              <p className="mt-0.5 text-red-700 leading-relaxed">
-                Your driver account has been suspended by the platform administrator. You cannot accept rides or go online.
-              </p>
-            </div>
-          </div>
-        )}
-
-        {verificationStatus === 'pending' && (
-          <div className="mb-4 sm:mb-5 p-4 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-800 flex items-start gap-3 shadow-sm">
-            <span className="w-5 h-5 rounded-full bg-amber-500 text-white font-bold flex items-center justify-center flex-shrink-0 mt-0.5">!</span>
-            <div>
-              <p className="font-bold text-amber-900">Verification Pending Review</p>
-              <p className="mt-0.5 text-amber-700 leading-relaxed">
-                Your driver details are undergoing administrative verification.
-              </p>
-            </div>
+            <button onClick={() => setShowIosPrompt(false)} className="text-amber-500 font-bold text-xs px-1">✕</button>
           </div>
         )}
 
@@ -881,9 +700,7 @@ export default function DriverDashboard({ setView }: Props) {
                   <p className="text-xs sm:text-sm font-bold text-neutral-900">{activeRide.rider}</p>
                   <p className="text-[11px] font-mono text-neutral-500 mt-0.5">{activeRide.phone}</p>
                 </div>
-                <p className="text-2xl font-black text-amber-600">
-                  ₦{activeRide.fare}
-                </p>
+                <p className="text-2xl font-black text-amber-600">₦{activeRide.fare}</p>
               </div>
 
               {phase === 'arriving' ? (
@@ -923,12 +740,10 @@ export default function DriverDashboard({ setView }: Props) {
             </div>
             <h3 className="text-lg font-black mb-1 text-neutral-900">Ride Completed!</h3>
             <p className="text-xs sm:text-sm text-neutral-500 mb-2">{activeRide.from} → {activeRide.to}</p>
-            <p className="text-3xl font-black text-amber-600 mb-5">
-              +₦{activeRide.fare}
-            </p>
+            <p className="text-3xl font-black text-amber-600 mb-5">+₦{activeRide.fare}</p>
             <button
               onClick={resetRide}
-              className="px-6 py-2.5 sm:py-3 rounded-xl font-bold text-xs sm:text-sm text-white hover:opacity-95 active:scale-95 transition-all shadow-sm"
+              className="px-6 py-2.5 sm:py-3 rounded-xl font-bold text-xs sm:text-sm text-white shadow-sm"
               style={{ background: '#E6900E' }}
             >
               Back to Queue
@@ -953,71 +768,46 @@ export default function DriverDashboard({ setView }: Props) {
           ))}
         </div>
 
-        {/* Tab: Queue - Offline / Suspended */}
+        {/* Tab: Queue */}
         {tab === 'queue' && (!online || verificationStatus === 'suspended') && (
           <EmptyState
             icon="⏻"
             title={verificationStatus === 'suspended' ? 'Account Restricted' : "You're Offline"}
-            description={
-              verificationStatus === 'suspended'
-                ? 'Your account is currently restricted from accepting dispatches. Contact the campus desk.'
-                : 'Toggle your status to online above to begin receiving live student ride requests.'
-            }
+            description="Toggle your status to online above to begin receiving live student ride requests."
             actionLabel={verificationStatus !== 'suspended' ? 'Go Online Now' : undefined}
             onAction={() => setOnline(true)}
           />
         )}
 
-        {/* Tab: Queue - Active Online Queue */}
         {tab === 'queue' && online && verificationStatus !== 'suspended' && (
           <div className="space-y-3">
             {pendingQueue.length === 0 ? (
-              <div className="bg-white rounded-2xl p-8 sm:p-10 text-center border border-neutral-200 shadow-sm flex flex-col items-center justify-center">
-                <div className="relative flex items-center justify-center w-16 h-16 mb-4">
-                  <span className="absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-20 animate-ping" />
-                  <div className="relative w-14 h-14 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center text-2xl shadow-inner">
-                    🛺
-                  </div>
-                </div>
-                <h3 className="text-base font-bold text-neutral-900 mb-1">Scanning for Ride Requests...</h3>
-                <p className="text-xs text-neutral-400 max-w-xs leading-relaxed">
-                  You are active. New ride requests will appear here automatically.
-                </p>
+              <div className="bg-white rounded-2xl p-8 text-center border border-neutral-200 shadow-sm">
+                <p className="text-sm font-bold text-neutral-800">Scanning for Ride Requests...</p>
+                <p className="text-xs text-neutral-400 mt-1">You are active. New ride requests will appear here automatically.</p>
               </div>
             ) : (
               pendingQueue.map((ride) => {
-                const isNegotiableRide = !ride.fare || ride.fare <= 0
-                const isMyQuote = ride.quotedDriverId === user?.id
-                const isBeingNegotiatedByOther = Boolean(ride.quotedDriverId && !isMyQuote)
+                const isNegotiable = !ride.fare || ride.fare <= 0
+                const isClaimedByOther = ride.status === 'claimed'
+                const mySubmittedQuote = submittedQuotes[ride.id]
 
                 return (
-                  <div key={ride.id} className="bg-white rounded-2xl p-4 sm:p-5 border border-neutral-200 shadow-sm transition-all duration-200">
+                  <div key={ride.id} className="bg-white rounded-2xl p-4 sm:p-5 border border-neutral-200 shadow-sm transition-all">
                     <div className="flex items-start justify-between mb-3 gap-3">
                       <div className="min-w-0 flex-1">
-                        <span className="text-[10px] sm:text-xs font-mono text-neutral-400">
-                          ID: {ride.id.slice(0, 8)}
-                        </span>
-                        <p className="text-sm sm:text-base font-bold text-neutral-900 truncate mt-0.5">
-                          {ride.from} → {ride.to}
-                        </p>
-                        <p className="text-xs text-neutral-500 truncate mt-0.5">
-                          {ride.rider} {ride.dept ? `· ${ride.dept}` : ''}
-                        </p>
-                        {isNegotiableRide && (
+                        <span className="text-[10px] sm:text-xs font-mono text-neutral-400">ID: {ride.id.slice(0, 8)}</span>
+                        <p className="text-sm sm:text-base font-bold text-neutral-900 truncate mt-0.5">{ride.from} → {ride.to}</p>
+                        <p className="text-xs text-neutral-500 truncate mt-0.5">{ride.rider} {ride.dept ? `· ${ride.dept}` : ''}</p>
+                        {isNegotiable && (
                           <span className="inline-block mt-1 text-[10px] font-bold px-2 py-0.5 rounded bg-amber-100 text-amber-800">
                             Custom Location
                           </span>
                         )}
                       </div>
                       <div className="text-right flex-shrink-0">
-                        <p className="text-lg sm:text-xl font-black" style={{ color: '#E6900E' }}>
-                          {ride.fare > 0
-                            ? `₦${ride.fare}`
-                            : isMyQuote && ride.fareQuote
-                            ? `₦${ride.fareQuote}`
-                            : isBeingNegotiatedByOther
-                            ? 'In negotiation'
-                            : 'Needs quote'}
+                        <p className="text-lg font-black" style={{ color: '#E6900E' }}>
+                          {ride.fare > 0 ? `₦${ride.fare}` : mySubmittedQuote ? `₦${mySubmittedQuote}` : 'Needs quote'}
                         </p>
                         <div className="flex items-center gap-1 justify-end mt-1">
                           <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse" />
@@ -1026,54 +816,17 @@ export default function DriverDashboard({ setView }: Props) {
                       </div>
                     </div>
 
-                    {isNegotiableRide ? (
+                    {isClaimedByOther ? (
+                      <div className="p-2.5 bg-neutral-100 rounded-xl text-center text-xs font-bold text-neutral-500 border border-neutral-200">
+                        ⚡ Ride claimed by another driver
+                      </div>
+                    ) : isNegotiable ? (
                       <div className="mt-3 pt-3 border-t border-neutral-100">
-                        {/* 1. Student accepted this driver's quote */}
-                        {ride.quoteStatus === 'agreed' && isMyQuote ? (
-                          <button
-                            onClick={() => handleAcceptOffcampusAgreed(ride)}
-                            className="w-full py-2.5 sm:py-3 rounded-xl font-bold text-xs sm:text-sm bg-emerald-600 text-white hover:bg-emerald-700 active:scale-[0.99] transition-all shadow-sm"
-                          >
-                            Passenger Agreed to ₦{ride.fareQuote || ride.fare} — Confirm & Pick Up
-                          </button>
-                        ) : /* 2. Student countered: ONLY visible to this quoting driver */
-                        ride.quoteStatus === 'countered' && isMyQuote ? (
-                          <div className="space-y-2">
-                            <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-between">
-                              <span className="text-xs text-amber-900 font-medium">Student countered your quote:</span>
-                              <span className="text-sm font-black text-amber-600">₦{ride.fareQuote}</span>
-                            </div>
-                            <div className="flex gap-2">
-                              <button
-                                onClick={() => handleRejectCounter(ride.id)}
-                                className="flex-1 py-2.5 rounded-xl text-xs font-bold border border-red-200 text-red-600 hover:bg-red-50 active:scale-95 transition-all"
-                              >
-                                Reject Offer
-                              </button>
-                              <button
-                                onClick={() => handleAcceptOffcampusAgreed(ride)}
-                                className="flex-1 py-2.5 rounded-xl text-xs font-bold bg-amber-500 text-white hover:bg-amber-600 active:scale-95 transition-all shadow-sm"
-                              >
-                                Accept ₦{ride.fareQuote}
-                              </button>
-                            </div>
-                          </div>
-                        ) : /* 3. Quote submitted, awaiting response */
-                        ride.quoteStatus === 'quoted' && isMyQuote ? (
-                          <div className="p-2.5 rounded-xl bg-neutral-50 border border-neutral-200 text-center">
-                            <p className="text-xs font-semibold text-neutral-600">
-                              Your quote of <span className="font-bold text-amber-600">₦{ride.fareQuote}</span> has been sent. Awaiting student response...
-                            </p>
-                          </div>
-                        ) : /* 4. Another driver negotiating */
-                        isBeingNegotiatedByOther ? (
-                          <div className="p-2.5 rounded-xl bg-neutral-50 border border-neutral-100 text-center">
-                            <p className="text-xs text-neutral-400 font-medium">
-                              Another driver is negotiating this trip. It will re-open if declined.
-                            </p>
+                        {mySubmittedQuote ? (
+                          <div className="p-2.5 bg-neutral-50 rounded-xl text-center text-xs font-semibold text-neutral-600 border border-neutral-200">
+                            Your quote of <span className="font-bold text-amber-600">₦{mySubmittedQuote}</span> was submitted. Awaiting rider's choice...
                           </div>
                         ) : (
-                          /* 5. Open for any driver to quote */
                           <div className="flex gap-2">
                             <input
                               type="number"
@@ -1092,12 +845,10 @@ export default function DriverDashboard({ setView }: Props) {
                         )}
                       </div>
                     ) : (
-                      /* Standard Fixed Route: Direct instant Accept button */
                       <button
                         onClick={() => accept(ride)}
                         disabled={Boolean(activeRide && phase !== 'completed')}
-                        className="w-full py-3 rounded-xl font-bold text-xs sm:text-sm transition-all disabled:opacity-30 hover:opacity-90 active:scale-[0.99] shadow-sm"
-                        style={{ background: '#1a1a1a', color: '#fff' }}
+                        className="w-full py-3 rounded-xl font-bold text-xs sm:text-sm bg-neutral-900 text-white hover:opacity-90 active:scale-[0.99] transition-all"
                       >
                         Accept Ride (₦{ride.fare})
                       </button>
