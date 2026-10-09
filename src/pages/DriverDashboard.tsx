@@ -782,9 +782,17 @@ export default function DriverDashboard({ setView }: Props) {
         {tab === 'queue' && online && verificationStatus !== 'suspended' && (
           <div className="space-y-3">
             {pendingQueue.length === 0 ? (
-              <div className="bg-white rounded-2xl p-8 text-center border border-neutral-200 shadow-sm">
-                <p className="text-sm font-bold text-neutral-800">Scanning for Ride Requests...</p>
-                <p className="text-xs text-neutral-400 mt-1">You are active. New ride requests will appear here automatically.</p>
+              <div className="bg-white rounded-2xl p-8 sm:p-10 text-center border border-neutral-200 shadow-sm flex flex-col items-center justify-center">
+                <div className="relative flex items-center justify-center w-16 h-16 mb-4">
+                  <span className="absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-20 animate-ping" />
+                  <div className="relative w-14 h-14 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center text-2xl shadow-inner">
+                    🛺
+                  </div>
+                </div>
+                <h3 className="text-base font-bold text-neutral-900 mb-1">Scanning for Ride Requests...</h3>
+                <p className="text-xs text-neutral-400 max-w-xs leading-relaxed">
+                  You are active. New ride requests will appear here automatically.
+                </p>
               </div>
             ) : (
               pendingQueue.map((ride) => {
