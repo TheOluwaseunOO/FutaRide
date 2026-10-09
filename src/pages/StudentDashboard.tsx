@@ -421,45 +421,29 @@ export default function StudentDashboard({ setView }: Props) {
     return () => clearInterval(timer)
   }, [phase, activeRideId, rideCreatedAt, timeLeft])
 
-  // Realtime subscription for active ride updates & multi-driver quotes
+  // Realtime subscription for active ride updates & RPC-powered driver quote resolution
   useEffect(() => {
     if (!activeRideId) return
 
     async function loadQuotes() {
-      const { data } = await supabase
-        .from('ride_quotes')
-        .select('id, driver_id, amount')
-        .eq('ride_id', activeRideId)
-        .eq('status', 'pending')
+      try {
+        const { data, error } = await supabase.rpc('get_ride_quotes_with_drivers', {
+          p_ride_id: activeRideId,
+        })
 
-      if (data) {
-        const enriched = await Promise.all(
-          data.map(async (q) => {
-            let name = 'Campus Driver'
-            let plate = 'Keke Unit'
-
-            try {
-              const [{ data: dp }, { data: p }] = await Promise.all([
-                supabase.from('driver_profiles').select('full_name, vehicle_plate_number').eq('id', q.driver_id).maybeSingle(),
-                supabase.from('profiles').select('full_name, vehicle_plate_number').eq('id', q.driver_id).maybeSingle(),
-              ])
-
-              name = dp?.full_name || p?.full_name || name
-              plate = dp?.vehicle_plate_number || p?.vehicle_plate_number || plate
-            } catch (err) {
-              console.warn('Driver profile fetch fallback:', err)
-            }
-
-            return {
+        if (!error && data) {
+          setDriverOffers(
+            data.map((q: any) => ({
               id: q.id,
               driver_id: q.driver_id,
               amount: Number(q.amount),
-              driver_name: name,
-              driver_plate: plate,
-            }
-          })
-        )
-        setDriverOffers(enriched)
+              driver_name: q.driver_name || 'Campus Driver',
+              driver_plate: q.driver_plate || 'Keke Unit',
+            }))
+          )
+        }
+      } catch (err) {
+        console.error('Error loading quotes via RPC:', err)
       }
     }
 
