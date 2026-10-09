@@ -26,6 +26,14 @@ interface PreloadedRoute {
   base_fare: number
 }
 
+interface DriverOffer {
+  id: string
+  driver_id: string
+  amount: number
+  driver_name: string
+  driver_plate: string
+}
+
 const FALLBACK_HUBS: LocationHub[] = [
   { id: '1', name: 'FUTA North Gate' },
   { id: '2', name: 'FUTA South Gate' },
@@ -100,8 +108,10 @@ export default function StudentDashboard({ setView }: Props) {
 
   // Active Ride & Live Negotiation State
   const [activeRideId, setActiveRideId] = useState<string | null>(null)
+  const [activeRideFare, setActiveRideFare] = useState<number>(0)
   const [rideCreatedAt, setRideCreatedAt] = useState<string | null>(null)
   const [assignedDriver, setAssignedDriver] = useState<AssignedDriver | null>(null)
+  const [driverOffers, setDriverOffers] = useState<DriverOffer[]>([])
   const [requestError, setRequestError] = useState<string>('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [phase, setPhase] = useState<Phase>('idle')
@@ -118,13 +128,8 @@ export default function StudentDashboard({ setView }: Props) {
   const [historyRides, setHistoryRides] = useState<any[]>([])
   const [loadingHistory, setLoadingHistory] = useState(false)
 
-  // Negotiation states
-  const [driverQuote, setDriverQuote] = useState<number | null>(null)
-  const [quoteStatus, setQuoteStatus] = useState<string>('none')
-  const [counterPriceInput, setCounterPriceInput] = useState<string>('')
-  const [showCounterBox, setShowCounterBox] = useState<boolean>(false)
-
-  const isCustomTrip = isPickupOthers || isDropoffOthers
+  // Treat as bidding trip if either pickup/dropoff is custom OR ride fare is 0
+  const isCustomTrip = isPickupOthers || isDropoffOthers || (activeRideId !== null && activeRideFare === 0)
 
   async function fetchDriverInfo(driverId: string) {
     if (!driverId) return
@@ -175,6 +180,7 @@ export default function StudentDashboard({ setView }: Props) {
         }
 
         setActiveRideId(ongoing.id)
+        setActiveRideFare(Number(ongoing.fare) || 0)
         setRideCreatedAt(ongoing.created_at)
         setDynamicFare(Number(ongoing.fare))
         if (ongoing.custom_pickup) {
@@ -185,8 +191,6 @@ export default function StudentDashboard({ setView }: Props) {
           setIsDropoffOthers(true)
           setCustomDropoffText(ongoing.custom_dropoff)
         }
-        if (ongoing.fare_quote) setDriverQuote(Number(ongoing.fare_quote))
-        if (ongoing.quote_status) setQuoteStatus(ongoing.quote_status)
 
         if (ongoing.status === 'requested') {
           setPhase('searching')
@@ -264,14 +268,13 @@ export default function StudentDashboard({ setView }: Props) {
       return
     }
 
-    if (isCustomTrip) {
+    if (isPickupOthers || isDropoffOthers) {
       setDynamicFare(0)
       setActiveRouteId(null)
       setIsResolvingFare(false)
       return
     }
 
-    // 1. Check synchronous fast cache (0ms delay)
     const directKey = `${pickupHub.id}::${dropoffHub.id}`
     const cached = routesCache.current.get(directKey)
 
@@ -282,7 +285,6 @@ export default function StudentDashboard({ setView }: Props) {
       return
     }
 
-    // 2. Fallback table check (0ms delay)
     const fallbackKey = `${pickupHub.name}→${dropoffHub.name}`
     const reverseKey = `${dropoffHub.name}→${pickupHub.name}`
     const staticFare = FALLBACK_FARES[fallbackKey] || FALLBACK_FARES[reverseKey]
@@ -293,7 +295,6 @@ export default function StudentDashboard({ setView }: Props) {
       return
     }
 
-    // 3. If uncached, fetch from DB while showing zero stale data
     setIsResolvingFare(true)
     async function resolveUncachedRoute() {
       try {
@@ -424,12 +425,54 @@ export default function StudentDashboard({ setView }: Props) {
     return () => clearInterval(timer)
   }, [phase, activeRideId, rideCreatedAt, timeLeft])
 
-  // 6. Realtime subscription for active ride updates & negotiations
+  // 6. Realtime subscription for active ride updates & multi-driver quotes
   useEffect(() => {
     if (!activeRideId) return
 
+    async function loadQuotes() {
+      const { data } = await supabase
+        .from('ride_quotes')
+        .select('id, driver_id, amount')
+        .eq('ride_id', activeRideId)
+        .eq('status', 'pending')
+
+      if (data) {
+        const enriched = await Promise.all(
+          data.map(async (q) => {
+            const { data: dp } = await supabase
+              .from('driver_profiles')
+              .select('full_name, vehicle_plate_number')
+              .eq('id', q.driver_id)
+              .maybeSingle()
+            return {
+              id: q.id,
+              driver_id: q.driver_id,
+              amount: Number(q.amount),
+              driver_name: dp?.full_name || 'Keke Driver',
+              driver_plate: dp?.vehicle_plate_number || 'Keke Unit',
+            }
+          })
+        )
+        setDriverOffers(enriched)
+      }
+    }
+
+    loadQuotes()
+
     const channel = supabase
-      .channel(`ride-status-${activeRideId}`)
+      .channel(`ride-status-and-quotes-${activeRideId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'ride_quotes',
+          filter: `ride_id=eq.${activeRideId}`,
+        },
+        () => {
+          loadQuotes()
+        }
+      )
       .on(
         'postgres_changes',
         {
@@ -441,11 +484,9 @@ export default function StudentDashboard({ setView }: Props) {
         async (payload) => {
           const row = payload.new as any
 
-          if (row.fare_quote) setDriverQuote(Number(row.fare_quote))
-          if (row.quote_status) setQuoteStatus(row.quote_status)
-
           if (row.status === 'accepted') {
             setDynamicFare(Number(row.fare))
+            setActiveRideFare(Number(row.fare))
             setPhase('accepted')
             if (row.driver_id) await fetchDriverInfo(row.driver_id)
           } else if (row.status === 'in_progress') {
@@ -459,6 +500,7 @@ export default function StudentDashboard({ setView }: Props) {
             setPhase('idle')
             setActiveRideId(null)
             setAssignedDriver(null)
+            setDriverOffers([])
           }
         }
       )
@@ -499,14 +541,16 @@ export default function StudentDashboard({ setView }: Props) {
           quote_status: isCustomTrip ? 'none' : 'agreed',
           created_at: nowIso,
         })
-        .select('id, created_at')
+        .select('id, created_at, fare')
         .single()
 
       if (rideErr) throw rideErr
 
       setActiveRideId(rideData.id)
+      setActiveRideFare(Number(rideData.fare) || 0)
       setRideCreatedAt(rideData.created_at || nowIso)
       setTimeLeft(TIMEOUT_SECONDS)
+      setDriverOffers([])
       setPhase('searching')
     } catch (err: any) {
       console.error('Ride request error:', err)
@@ -516,39 +560,30 @@ export default function StudentDashboard({ setView }: Props) {
     }
   }
 
-  async function handleAcceptQuote() {
-    if (!activeRideId || !driverQuote) return
+  // Accept a specific driver quote from the multi-driver bidding pool
+  async function handleAcceptQuote(offer: DriverOffer) {
+    if (!activeRideId) return
     setIsSubmitting(true)
     try {
-      await supabase
-        .from('rides')
-        .update({
-          quote_status: 'agreed',
-          fare: driverQuote,
-        })
-        .eq('id', activeRideId)
-    } catch (err) {
-      console.error('Accept quote error:', err)
-    } finally {
-      setIsSubmitting(false)
-    }
-  }
+      const { data, error } = await supabase.rpc('accept_driver_quote', {
+        p_ride_id: activeRideId,
+        p_quote_id: offer.id,
+        p_driver_id: offer.driver_id,
+        p_agreed_fare: offer.amount,
+      })
 
-  async function handleSendCounter() {
-    const val = Number(counterPriceInput)
-    if (!activeRideId || isNaN(val) || val <= 0) return
-    setIsSubmitting(true)
-    try {
-      await supabase
-        .from('rides')
-        .update({
-          fare_quote: val,
-          quote_status: 'countered',
-        })
-        .eq('id', activeRideId)
-      setShowCounterBox(false)
-    } catch (err) {
-      console.error('Counter offer error:', err)
+      if (error || !data?.success) {
+        setRequestError(data?.message || error?.message || 'Failed to accept quote.')
+        return
+      }
+
+      setDynamicFare(offer.amount)
+      setActiveRideFare(offer.amount)
+      setPhase('accepted')
+      await fetchDriverInfo(offer.driver_id)
+    } catch (err: any) {
+      console.error('Accept quote error:', err)
+      setRequestError(err?.message || 'Failed to accept quote.')
     } finally {
       setIsSubmitting(false)
     }
@@ -572,9 +607,9 @@ export default function StudentDashboard({ setView }: Props) {
       setShowCancelModal(false)
       setPhase('idle')
       setActiveRideId(null)
+      setActiveRideFare(0)
       setAssignedDriver(null)
-      setDriverQuote(null)
-      setQuoteStatus('none')
+      setDriverOffers([])
       setPickupHub(null)
       setIsPickupOthers(false)
       setCustomPickupText('')
@@ -592,9 +627,9 @@ export default function StudentDashboard({ setView }: Props) {
   function handleResetAfterExpired() {
     setPhase('idle')
     setActiveRideId(null)
+    setActiveRideFare(0)
     setAssignedDriver(null)
-    setDriverQuote(null)
-    setQuoteStatus('none')
+    setDriverOffers([])
     setPickupHub(null)
     setIsPickupOthers(false)
     setCustomPickupText('')
@@ -793,7 +828,7 @@ export default function StudentDashboard({ setView }: Props) {
                     {isCustomTrip ? (
                       <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 mb-3 text-xs leading-relaxed text-amber-900">
                         <p className="font-bold mb-0.5">Custom Route Fare</p>
-                        Drivers will submit quotes for unlisted campus and off-campus trips. You can accept or negotiate quotes in real time.
+                        Multiple online drivers will submit quotes. You can compare offers and choose the driver you prefer.
                       </div>
                     ) : (
                       <div className="flex items-center justify-between p-3.5 rounded-xl bg-orange-50 border border-orange-200 mb-3">
@@ -837,7 +872,7 @@ export default function StudentDashboard({ setView }: Props) {
                 </div>
 
                 <h2 className="text-lg sm:text-xl font-black text-neutral-900 mb-1">
-                  {driverQuote ? 'Driver Quoted a Fare' : 'Looking for Nearby Drivers…'}
+                  {isCustomTrip ? 'Waiting for Driver Bids…' : 'Looking for Nearby Drivers…'}
                 </h2>
                 <p className="text-xs sm:text-sm text-neutral-500 mb-4 px-2">
                   <span className="font-semibold">{displayPickup}</span> → <span className="font-semibold">{displayDest}</span>
@@ -852,57 +887,50 @@ export default function StudentDashboard({ setView }: Props) {
                 </div>
 
                 {isCustomTrip && (
-                  <div className="my-4 p-4 rounded-xl bg-neutral-50 border border-neutral-200 text-left">
-                    {driverQuote ? (
-                      <div>
-                        <div className="flex items-center justify-between mb-3">
-                          <span className="text-xs font-bold uppercase tracking-wider text-neutral-500">Driver Offer:</span>
-                          <span className="text-2xl font-black text-amber-600">₦{driverQuote}</span>
-                        </div>
+                  <div className="my-4 space-y-2 text-left">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-xs font-bold uppercase tracking-wider text-neutral-500">
+                        Driver Quotes ({driverOffers.length})
+                      </p>
+                      <span className="text-[11px] text-amber-600 font-semibold animate-pulse">
+                        Live offers
+                      </span>
+                    </div>
 
-                        {quoteStatus === 'countered' ? (
-                          <p className="text-xs text-amber-700 italic mb-2">
-                            Counter-offer of ₦{driverQuote} sent! Waiting for driver to accept...
-                          </p>
-                        ) : (
-                          <div className="flex gap-2">
-                            <button
-                              onClick={handleAcceptQuote}
-                              className="flex-1 py-2.5 rounded-xl font-bold text-xs bg-amber-500 text-white hover:bg-amber-600 active:scale-95 transition-all"
-                            >
-                              Accept ₦{driverQuote}
-                            </button>
-                            <button
-                              onClick={() => setShowCounterBox(b => !b)}
-                              className="px-4 py-2.5 rounded-xl font-bold text-xs bg-neutral-200 text-neutral-800 hover:bg-neutral-300 active:scale-95 transition-all"
-                            >
-                              Counter
-                            </button>
-                          </div>
-                        )}
-
-                        {showCounterBox && (
-                          <div className="mt-3 pt-3 border-t border-neutral-200 flex gap-2">
-                            <input
-                              type="number"
-                              value={counterPriceInput}
-                              onChange={e => setCounterPriceInput(e.target.value)}
-                              placeholder="Your price (e.g. 800)"
-                              className="w-full px-3 py-2 text-xs rounded-xl bg-white border border-neutral-300 focus:outline-none"
-                            />
-                            <button
-                              onClick={handleSendCounter}
-                              className="px-4 py-2 text-xs font-bold rounded-xl bg-neutral-900 text-white"
-                            >
-                              Send
-                            </button>
-                          </div>
-                        )}
+                    {driverOffers.length === 0 ? (
+                      <div className="p-4 bg-neutral-50 rounded-xl text-center border border-neutral-100">
+                        <p className="text-xs text-neutral-500">
+                          Drivers are viewing your route. Quoted prices will appear here in real time.
+                        </p>
                       </div>
                     ) : (
-                      <p className="text-xs text-neutral-500 text-center py-2">
-                        Drivers are viewing your route. Once a driver quotes a fare, it will appear here for your review.
-                      </p>
+                      driverOffers.map((offer) => (
+                        <div
+                          key={offer.id}
+                          className="p-3.5 bg-white border border-neutral-200 rounded-xl shadow-sm flex items-center justify-between gap-3 hover:border-amber-300 transition-all"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs sm:text-sm font-bold text-neutral-900 truncate">
+                              {offer.driver_name}
+                            </p>
+                            <p className="text-[11px] text-neutral-400 font-mono mt-0.5 truncate">
+                              {offer.driver_plate}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-3 flex-shrink-0">
+                            <span className="text-base sm:text-lg font-black text-amber-600">
+                              ₦{offer.amount}
+                            </span>
+                            <button
+                              onClick={() => handleAcceptQuote(offer)}
+                              disabled={isSubmitting}
+                              className="px-3.5 py-2 rounded-xl text-xs font-bold bg-amber-500 text-white hover:bg-amber-600 active:scale-95 transition-all shadow-sm disabled:opacity-50"
+                            >
+                              Accept
+                            </button>
+                          </div>
+                        </div>
+                      ))
                     )}
                   </div>
                 )}
@@ -1010,20 +1038,7 @@ export default function StudentDashboard({ setView }: Props) {
                 <p className="text-xs sm:text-sm text-neutral-500 mb-3">{displayPickup} → {displayDest}</p>
                 <p className="text-3xl font-black text-amber-600 mb-6">₦{dynamicFare}</p>
                 <button
-                  onClick={() => {
-                    setPhase('idle')
-                    setActiveRideId(null)
-                    setAssignedDriver(null)
-                    setDriverQuote(null)
-                    setQuoteStatus('none')
-                    setPickupHub(null)
-                    setIsPickupOthers(false)
-                    setCustomPickupText('')
-                    setDropoffHub(null)
-                    setIsDropoffOthers(false)
-                    setCustomDropoffText('')
-                    setDynamicFare(null)
-                  }}
+                  onClick={handleResetAfterExpired}
                   className="px-6 py-3 rounded-xl bg-amber-500 text-white font-bold text-xs sm:text-sm hover:bg-amber-600 active:scale-95 transition-all shadow-sm"
                 >
                   Book Another Ride
