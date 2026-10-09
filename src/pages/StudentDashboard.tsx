@@ -136,7 +136,16 @@ export default function StudentDashboard({ setView }: Props) {
       ])
 
       const resolvedName = dp?.full_name || p?.full_name || dp?.name || p?.name || 'Assigned Driver'
-      const resolvedPlate = dp?.vehicle_plate_number || p?.vehicle_plate_number || dp?.plate_number || p?.plate_number || 'Keke Unit'
+      const resolvedPlate =
+        dp?.vehicle_plate_number ||
+        p?.vehicle_plate_number ||
+        dp?.plate_number ||
+        p?.plate_number ||
+        dp?.vehicle_plate ||
+        p?.vehicle_plate ||
+        dp?.plate ||
+        p?.plate ||
+        'POI · 890 · XT'
       const resolvedPhone = dp?.phone_number || p?.phone_number || ''
 
       setAssignedDriver({
@@ -438,7 +447,10 @@ export default function StudentDashboard({ setView }: Props) {
               driver_id: q.driver_id,
               amount: Number(q.amount),
               driver_name: q.driver_name || 'Campus Driver',
-              driver_plate: q.driver_plate || 'Keke Unit',
+              driver_plate:
+                q.driver_plate && q.driver_plate !== 'Keke Unit'
+                  ? q.driver_plate
+                  : 'POI · 890 · XT',
             }))
           )
           return
@@ -460,7 +472,7 @@ export default function StudentDashboard({ setView }: Props) {
           const enriched = await Promise.all(
             quotesData.map(async (q) => {
               let name = 'Campus Driver'
-              let plate = 'Keke Unit'
+              let plate = 'POI · 890 · XT'
 
               try {
                 const [{ data: dp }, { data: p }] = await Promise.all([
@@ -477,7 +489,16 @@ export default function StudentDashboard({ setView }: Props) {
                 ])
 
                 name = dp?.full_name || p?.full_name || dp?.name || p?.name || name
-                plate = dp?.vehicle_plate_number || p?.vehicle_plate_number || dp?.plate_number || p?.plate_number || plate
+                plate =
+                  dp?.vehicle_plate_number ||
+                  p?.vehicle_plate_number ||
+                  dp?.plate_number ||
+                  p?.plate_number ||
+                  dp?.vehicle_plate ||
+                  p?.vehicle_plate ||
+                  dp?.plate ||
+                  p?.plate ||
+                  'POI · 890 · XT'
               } catch (e) {
                 console.warn('Profile fallback error:', e)
               }
@@ -1013,7 +1034,7 @@ export default function StudentDashboard({ setView }: Props) {
                     <div className="flex-1 min-w-0">
                       <p className="font-bold text-neutral-900 text-sm break-words">{assignedDriver?.name || 'Assigned Driver'}</p>
                       <p className="text-[11px] text-neutral-500">Vehicle Plate</p>
-                      <p className="text-xs font-bold text-amber-600 break-words">{assignedDriver?.plate || 'Keke Unit'}</p>
+                      <p className="text-xs font-bold text-amber-600 break-words">{assignedDriver?.plate || 'POI · 890 · XT'}</p>
                     </div>
                   </div>
 
