@@ -89,7 +89,6 @@ export default function StudentDashboard({ setView }: Props) {
   const [hubs, setHubs] = useState<LocationHub[]>(FALLBACK_HUBS)
   const [loadingHubs, setLoadingHubs] = useState(true)
 
-  // In-memory route map to eliminate the 1-second price flickering
   const routesCache = useRef<Map<string, { id: string; fare: number }>>(new Map())
 
   // Pickup selection
@@ -114,33 +113,30 @@ export default function StudentDashboard({ setView }: Props) {
   const [driverOffers, setDriverOffers] = useState<DriverOffer[]>([])
   const [requestError, setRequestError] = useState<string>('')
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [phase, setPhase] = useState<Phase>('idle')
+  const [phase, setPhase] = useState<Phase>(null as any) || useState<Phase>('idle')
   const [tab, setTab] = useState<'book' | 'history'>('book')
 
-  // Timeout Countdown (180s)
   const [timeLeft, setTimeLeft] = useState<number>(TIMEOUT_SECONDS)
-
-  // Cancellation Modal State
   const [showCancelModal, setShowCancelModal] = useState(false)
   const [isCancelling, setIsCancelling] = useState(false)
 
-  // History state
   const [historyRides, setHistoryRides] = useState<any[]>([])
   const [loadingHistory, setLoadingHistory] = useState(false)
 
-  // Treat as bidding trip if either pickup/dropoff is custom OR ride fare is 0
   const isCustomTrip = isPickupOthers || isDropoffOthers || (activeRideId !== null && activeRideFare === 0)
 
   async function fetchDriverInfo(driverId: string) {
     if (!driverId) return
 
     try {
-      const { data: d1 } = await supabase.from('driver_profiles').select('*').eq('id', driverId).maybeSingle()
-      const { data: p } = await supabase.from('profiles').select('*').eq('id', driverId).maybeSingle()
+      const [{ data: dp }, { data: p }] = await Promise.all([
+        supabase.from('driver_profiles').select('*').eq('id', driverId).maybeSingle(),
+        supabase.from('profiles').select('*').eq('id', driverId).maybeSingle(),
+      ])
 
-      const resolvedName = d1?.full_name || p?.full_name || d1?.name || p?.name || 'Assigned Driver'
-      const resolvedPlate = d1?.vehicle_plate_number || p?.vehicle_plate_number || d1?.plate_number || p?.plate_number || 'Keke Unit'
-      const resolvedPhone = d1?.phone_number || p?.phone_number || ''
+      const resolvedName = dp?.full_name || p?.full_name || dp?.name || p?.name || 'Assigned Driver'
+      const resolvedPlate = dp?.vehicle_plate_number || p?.vehicle_plate_number || dp?.plate_number || p?.plate_number || 'Keke Unit'
+      const resolvedPhone = dp?.phone_number || p?.phone_number || ''
 
       setAssignedDriver({
         name: resolvedName,
@@ -152,7 +148,6 @@ export default function StudentDashboard({ setView }: Props) {
     }
   }
 
-  // 1. Restore active rider ride on mount and reconnection recovery
   const restoreRiderRide = useCallback(async () => {
     if (!user) return
 
@@ -225,7 +220,6 @@ export default function StudentDashboard({ setView }: Props) {
     restoreRiderRide()
   }, [restoreRiderRide])
 
-  // 2. Fetch hubs & PRELOAD all routes into cache upfront to eliminate price delay
   useEffect(() => {
     async function initLocationsAndRoutes() {
       try {
@@ -259,7 +253,6 @@ export default function StudentDashboard({ setView }: Props) {
     initLocationsAndRoutes()
   }, [])
 
-  // 3. Instant 0ms Route & Fare Resolution
   useEffect(() => {
     if (!pickupHub || !dropoffHub) {
       setDynamicFare(null)
@@ -322,7 +315,6 @@ export default function StudentDashboard({ setView }: Props) {
     resolveUncachedRoute()
   }, [pickupHub, dropoffHub, isPickupOthers, isDropoffOthers])
 
-  // 4. Fetch trip history
   useEffect(() => {
     if (tab !== 'history' || !user) return
 
@@ -395,7 +387,6 @@ export default function StudentDashboard({ setView }: Props) {
   const displayPickup = isPickupOthers ? customPickupText.trim() : pickupHub?.name || ''
   const displayDest = isDropoffOthers ? customDropoffText.trim() : dropoffHub?.name || ''
 
-  // 5. 180s Countdown Timer during 'searching'
   useEffect(() => {
     if (phase !== 'searching' || !activeRideId) return
 
@@ -425,7 +416,7 @@ export default function StudentDashboard({ setView }: Props) {
     return () => clearInterval(timer)
   }, [phase, activeRideId, rideCreatedAt, timeLeft])
 
-  // 6. Realtime subscription for active ride updates & multi-driver quotes
+  // Realtime subscription for active ride updates & robust multi-driver quote resolution
   useEffect(() => {
     if (!activeRideId) return
 
@@ -439,17 +430,27 @@ export default function StudentDashboard({ setView }: Props) {
       if (data) {
         const enriched = await Promise.all(
           data.map(async (q) => {
-            const { data: dp } = await supabase
-              .from('driver_profiles')
-              .select('full_name, vehicle_plate_number')
-              .eq('id', q.driver_id)
-              .maybeSingle()
+            let name = 'Campus Driver'
+            let plate = 'Keke Unit'
+
+            try {
+              const [{ data: dp }, { data: p }] = await Promise.all([
+                supabase.from('driver_profiles').select('full_name, vehicle_plate_number').eq('id', q.driver_id).maybeSingle(),
+                supabase.from('profiles').select('full_name, vehicle_plate_number').eq('id', q.driver_id).maybeSingle(),
+              ])
+
+              name = dp?.full_name || p?.full_name || name
+              plate = dp?.vehicle_plate_number || p?.vehicle_plate_number || plate
+            } catch (err) {
+              console.warn('Driver profile fetch fallback:', err)
+            }
+
             return {
               id: q.id,
               driver_id: q.driver_id,
               amount: Number(q.amount),
-              driver_name: dp?.full_name || 'Keke Driver',
-              driver_plate: dp?.vehicle_plate_number || 'Keke Unit',
+              driver_name: name,
+              driver_plate: plate,
             }
           })
         )
@@ -560,7 +561,6 @@ export default function StudentDashboard({ setView }: Props) {
     }
   }
 
-  // Accept a specific driver quote from the multi-driver bidding pool
   async function handleAcceptQuote(offer: DriverOffer) {
     if (!activeRideId) return
     setIsSubmitting(true)
@@ -641,7 +641,6 @@ export default function StudentDashboard({ setView }: Props) {
 
   return (
     <div className="min-h-screen flex flex-col font-sans pb-12 sm:pb-8" style={{ background: '#f7f7f7' }}>
-      {/* Network Connectivity Banner */}
       <NetworkBanner onReconnect={restoreRiderRide} />
 
       {/* Top Header */}
@@ -655,7 +654,7 @@ export default function StudentDashboard({ setView }: Props) {
 
         <div className="flex items-center gap-2 sm:gap-3">
           <div className="text-right">
-            <p className="text-xs sm:text-sm font-bold leading-tight text-neutral-900 truncate max-w-[140px] sm:max-w-[200px]">
+            <p className="text-xs sm:text-sm font-bold leading-tight text-neutral-900 break-words max-w-[140px] sm:max-w-[200px]">
               {displayName}
             </p>
             <p className="text-[11px] text-neutral-500 mt-0.5">
@@ -706,7 +705,7 @@ export default function StudentDashboard({ setView }: Props) {
                     </span>
                     <p className="text-xs font-bold uppercase tracking-wider text-neutral-500">Pickup Location</p>
                     {displayPickup && (
-                      <span className="ml-auto text-xs font-bold text-amber-600 truncate max-w-[140px] sm:max-w-[200px]">
+                      <span className="ml-auto text-xs font-bold text-amber-600 break-words text-right max-w-[160px] sm:max-w-[220px]">
                         {displayPickup}
                       </span>
                     )}
@@ -732,7 +731,7 @@ export default function StudentDashboard({ setView }: Props) {
                                 setCustomPickupText('')
                               }
                             }}
-                            className={`px-3 py-2.5 rounded-xl text-xs font-semibold text-left transition-all active:scale-[0.98] leading-tight ${
+                            className={`px-3 py-2.5 rounded-xl text-xs font-semibold text-left transition-all active:scale-[0.98] leading-tight break-words ${
                               isOthers ? 'col-span-2' : ''
                             }`}
                             style={{
@@ -767,7 +766,7 @@ export default function StudentDashboard({ setView }: Props) {
                     </span>
                     <p className="text-xs font-bold uppercase tracking-wider text-neutral-500">Drop-off Destination</p>
                     {displayDest && (
-                      <span className="ml-auto text-xs font-bold text-neutral-900 truncate max-w-[140px] sm:max-w-[200px]">
+                      <span className="ml-auto text-xs font-bold text-neutral-900 break-words text-right max-w-[160px] sm:max-w-[220px]">
                         {displayDest}
                       </span>
                     )}
@@ -795,7 +794,7 @@ export default function StudentDashboard({ setView }: Props) {
                                   setCustomDropoffText('')
                                 }
                               }}
-                              className={`px-3 py-2.5 rounded-xl text-xs font-semibold text-left transition-all active:scale-[0.98] leading-tight ${
+                              className={`px-3 py-2.5 rounded-xl text-xs font-semibold text-left transition-all active:scale-[0.98] leading-tight break-words ${
                                 isOthers ? 'col-span-2' : ''
                               }`}
                               style={{
@@ -874,8 +873,10 @@ export default function StudentDashboard({ setView }: Props) {
                 <h2 className="text-lg sm:text-xl font-black text-neutral-900 mb-1">
                   {isCustomTrip ? 'Waiting for Driver Bids…' : 'Looking for Nearby Drivers…'}
                 </h2>
-                <p className="text-xs sm:text-sm text-neutral-500 mb-4 px-2">
-                  <span className="font-semibold">{displayPickup}</span> → <span className="font-semibold">{displayDest}</span>
+                <p className="text-xs sm:text-sm text-neutral-600 mb-4 px-2 break-words leading-relaxed">
+                  <span className="font-semibold text-neutral-900">{displayPickup}</span>
+                  <span className="mx-1.5 text-neutral-400">→</span>
+                  <span className="font-semibold text-neutral-900">{displayDest}</span>
                 </p>
 
                 {/* Expiration countdown pill */}
@@ -910,10 +911,10 @@ export default function StudentDashboard({ setView }: Props) {
                           className="p-3.5 bg-white border border-neutral-200 rounded-xl shadow-sm flex items-center justify-between gap-3 hover:border-amber-300 transition-all"
                         >
                           <div className="min-w-0 flex-1">
-                            <p className="text-xs sm:text-sm font-bold text-neutral-900 truncate">
+                            <p className="text-xs sm:text-sm font-bold text-neutral-900 break-words leading-snug">
                               {offer.driver_name}
                             </p>
-                            <p className="text-[11px] text-neutral-400 font-mono mt-0.5 truncate">
+                            <p className="text-[11px] text-neutral-500 font-mono mt-0.5 break-words">
                               {offer.driver_plate}
                             </p>
                           </div>
@@ -970,20 +971,20 @@ export default function StudentDashboard({ setView }: Props) {
                       🛺
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="font-bold text-neutral-900 text-sm truncate">{assignedDriver?.name || 'Assigned Driver'}</p>
+                      <p className="font-bold text-neutral-900 text-sm break-words">{assignedDriver?.name || 'Assigned Driver'}</p>
                       <p className="text-[11px] text-neutral-500">Vehicle Plate</p>
-                      <p className="text-xs font-bold text-amber-600">{assignedDriver?.plate || 'Keke Unit'}</p>
+                      <p className="text-xs font-bold text-amber-600 break-words">{assignedDriver?.plate || 'Keke Unit'}</p>
                     </div>
                   </div>
 
                   <div className="grid grid-cols-2 gap-2 text-xs mb-4">
                     <div className="p-3 rounded-xl bg-neutral-50">
                       <p className="text-neutral-400 font-semibold mb-0.5">Pickup</p>
-                      <p className="font-bold text-neutral-800 truncate">{displayPickup}</p>
+                      <p className="font-bold text-neutral-800 break-words leading-snug">{displayPickup}</p>
                     </div>
                     <div className="p-3 rounded-xl bg-neutral-50">
                       <p className="text-neutral-400 font-semibold mb-0.5">Drop-off</p>
-                      <p className="font-bold text-neutral-800 truncate">{displayDest}</p>
+                      <p className="font-bold text-neutral-800 break-words leading-snug">{displayDest}</p>
                     </div>
                   </div>
 
@@ -1014,11 +1015,11 @@ export default function StudentDashboard({ setView }: Props) {
                     🛺
                   </div>
                   <h3 className="text-lg font-black text-neutral-900 mb-1">On the way to destination</h3>
-                  <p className="text-xs text-neutral-500 mb-4">{displayPickup} → {displayDest}</p>
+                  <p className="text-xs text-neutral-500 mb-4 break-words">{displayPickup} → {displayDest}</p>
 
-                  <div className="p-3 rounded-xl bg-neutral-50 border border-neutral-100 mb-4 text-xs flex justify-between items-center">
+                  <div className="p-3 rounded-xl bg-neutral-50 border border-neutral-100 mb-4 text-xs flex justify-between items-center gap-2">
                     <span className="text-neutral-500">Driver:</span>
-                    <span className="font-bold text-neutral-800">
+                    <span className="font-bold text-neutral-800 text-right break-words">
                       {assignedDriver?.name} ({assignedDriver?.plate})
                     </span>
                   </div>
@@ -1035,7 +1036,7 @@ export default function StudentDashboard({ setView }: Props) {
                   ✓
                 </div>
                 <h2 className="text-xl font-black mb-1">Ride Complete!</h2>
-                <p className="text-xs sm:text-sm text-neutral-500 mb-3">{displayPickup} → {displayDest}</p>
+                <p className="text-xs sm:text-sm text-neutral-500 mb-3 break-words">{displayPickup} → {displayDest}</p>
                 <p className="text-3xl font-black text-amber-600 mb-6">₦{dynamicFare}</p>
                 <button
                   onClick={handleResetAfterExpired}
@@ -1064,12 +1065,12 @@ export default function StudentDashboard({ setView }: Props) {
               />
             ) : (
               historyRides.map(ride => (
-                <div key={ride.id} className="p-4 rounded-2xl bg-white border border-neutral-200 shadow-sm flex items-center justify-between">
-                  <div className="min-w-0 pr-3">
-                    <div className="flex items-center gap-1.5 font-bold text-xs sm:text-sm text-neutral-900 truncate">
-                      <span className="truncate">{ride.pickup}</span>
-                      <span className="text-neutral-400">→</span>
-                      <span className="truncate">{ride.dropoff}</span>
+                <div key={ride.id} className="p-4 rounded-2xl bg-white border border-neutral-200 shadow-sm flex items-center justify-between gap-3">
+                  <div className="min-w-0 pr-2 flex-1">
+                    <div className="font-bold text-xs sm:text-sm text-neutral-900 break-words leading-snug">
+                      <span>{ride.pickup}</span>
+                      <span className="text-neutral-400 mx-1">→</span>
+                      <span>{ride.dropoff}</span>
                     </div>
                     <p className="text-[11px] text-neutral-400 mt-1">{ride.date}</p>
                   </div>
@@ -1094,7 +1095,6 @@ export default function StudentDashboard({ setView }: Props) {
         )}
       </div>
 
-      {/* Mandatory Cancellation Modal */}
       <CancelRideModal
         isOpen={showCancelModal}
         onClose={() => setShowCancelModal(false)}

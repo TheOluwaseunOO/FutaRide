@@ -70,19 +70,15 @@ export default function DriverDashboard({ setView }: Props) {
   const [tab, setTab] = useState<'queue' | 'history'>('queue')
   const [claimError, setClaimError] = useState<string>('')
   
-  // Per-driver individual quotes mapped by ride_id
   const [driverQuoteInputs, setDriverQuoteInputs] = useState<Record<string, string>>({})
   const [submittedQuotes, setSubmittedQuotes] = useState<Record<string, number>>({})
 
-  // Transition guard to eliminate UI phase rollback
   const isTransitioningRef = useRef(false)
 
-  // Notifications State
   const [showNotifications, setShowNotifications] = useState(false)
   const [notifications, setNotifications] = useState<DriverNotification[]>([])
   const notifRef = useRef<HTMLDivElement>(null)
 
-  // Cancellation Modal State
   const [showCancelModal, setShowCancelModal] = useState(false)
   const [isCancelling, setIsCancelling] = useState(false)
   const [showIosPrompt, setShowIosPrompt] = useState(false)
@@ -100,21 +96,18 @@ export default function DriverDashboard({ setView }: Props) {
     }
   }
 
-  // Detect iOS Safari standalone mode
   useEffect(() => {
     const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream
     const isStandalone = window.matchMedia('(display-mode: standalone)').matches || (navigator as any).standalone === true
     if (isIOS && !isStandalone) setShowIosPrompt(true)
   }, [])
 
-  // Universal Push Registration
   useEffect(() => {
     if (user?.id && online && verificationStatus !== 'suspended') {
       subscribeDriverToPush(user.id).catch(console.warn)
     }
   }, [user?.id, online, verificationStatus])
 
-  // Load quotes submitted by this current driver
   useEffect(() => {
     if (!user) return
     async function loadMyQuotes() {
@@ -131,7 +124,6 @@ export default function DriverDashboard({ setView }: Props) {
     loadMyQuotes()
   }, [user])
 
-  // Click outside to dismiss notification dropdown
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
       if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
@@ -142,7 +134,6 @@ export default function DriverDashboard({ setView }: Props) {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  // Internal notifications list based on status
   useEffect(() => {
     const list: DriverNotification[] = [
       {
@@ -177,7 +168,6 @@ export default function DriverDashboard({ setView }: Props) {
     setNotifications(list)
   }, [verificationStatus])
 
-  // Map database row safely
   async function transformDbRide(rideRow: any): Promise<QueueRide> {
     let fromName = rideRow.custom_pickup || ''
     let toName = rideRow.custom_dropoff || ''
@@ -241,7 +231,6 @@ export default function DriverDashboard({ setView }: Props) {
     }
   }
 
-  // Verification status check
   useEffect(() => {
     if (!user) return
     async function checkVerification() {
@@ -254,7 +243,6 @@ export default function DriverDashboard({ setView }: Props) {
     checkVerification()
   }, [user])
 
-  // Restore active ongoing trip with transition protection
   const restoreActiveRide = useCallback(async () => {
     if (!user || isTransitioningRef.current) return
 
@@ -288,7 +276,6 @@ export default function DriverDashboard({ setView }: Props) {
     restoreActiveRide()
   }, [restoreActiveRide])
 
-  // Fetch completed rides for today
   useEffect(() => {
     async function loadCompletedRides() {
       if (!user) return
@@ -330,7 +317,6 @@ export default function DriverDashboard({ setView }: Props) {
     loadCompletedRides()
   }, [user, phase])
 
-  // Load initial queue
   const loadInitialQueue = useCallback(async () => {
     if (!online || verificationStatus === 'suspended') {
       setPendingQueue([])
@@ -349,7 +335,6 @@ export default function DriverDashboard({ setView }: Props) {
     }
   }, [online, verificationStatus])
 
-  // Realtime queue listener & instant multi-driver claimed notifications
   useEffect(() => {
     loadInitialQueue()
     if (!online || verificationStatus === 'suspended') return
@@ -371,7 +356,6 @@ export default function DriverDashboard({ setView }: Props) {
         } else if (payload.eventType === 'UPDATE') {
           const updatedRow = payload.new
 
-          // If accepted by ME, immediately promote to active trip
           if (updatedRow.status === 'accepted' && updatedRow.driver_id === user?.id) {
             const myTrip = await transformDbRide(updatedRow)
             setActiveRide(myTrip)
@@ -380,7 +364,6 @@ export default function DriverDashboard({ setView }: Props) {
             return
           }
 
-          // If accepted by ANOTHER driver, show instant claimed banner and remove
           if (updatedRow.status === 'accepted' && updatedRow.driver_id !== user?.id) {
             setPendingQueue((prev) => prev.map((r) => (r.id === updatedRow.id ? { ...r, status: 'claimed' } : r)))
             setTimeout(() => {
@@ -403,7 +386,6 @@ export default function DriverDashboard({ setView }: Props) {
     }
   }, [online, verificationStatus, user?.id, loadInitialQueue])
 
-  // Queue elapsed seconds timer
   useEffect(() => {
     if (!online || pendingQueue.length === 0) return
     const interval = setInterval(() => {
@@ -426,7 +408,6 @@ export default function DriverDashboard({ setView }: Props) {
     if (next && user?.id) subscribeDriverToPush(user.id).catch(console.warn)
   }
 
-  // Multi-driver quoting: saves directly to ride_quotes table
   async function handleSendQuote(rideId: string) {
     if (!user || verificationStatus === 'suspended') return
     const quoteVal = Number(driverQuoteInputs[rideId])
@@ -456,7 +437,6 @@ export default function DriverDashboard({ setView }: Props) {
     }
   }
 
-  // Accept a standard fixed-fare ride
   async function accept(ride: QueueRide) {
     if (!user) return
     isTransitioningRef.current = true
@@ -606,7 +586,7 @@ export default function DriverDashboard({ setView }: Props) {
           </div>
 
           <div className="hidden sm:block text-right">
-            <p className="text-sm font-bold leading-none text-neutral-900 truncate max-w-[140px]">{driverName}</p>
+            <p className="text-sm font-bold leading-none text-neutral-900 break-words max-w-[140px]">{driverName}</p>
             <p className="text-[11px] text-neutral-500 mt-0.5">{driverUnit}</p>
           </div>
 
@@ -637,7 +617,6 @@ export default function DriverDashboard({ setView }: Props) {
 
       {/* Main Container */}
       <div className="flex-1 max-w-lg mx-auto w-full px-4 sm:px-0 py-5 sm:py-6">
-        {/* iOS Notice */}
         {showIosPrompt && (
           <div className="mb-4 p-3.5 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-start gap-2.5 shadow-sm">
             <span className="text-base flex-shrink-0 mt-0.5">📲</span>
@@ -686,21 +665,21 @@ export default function DriverDashboard({ setView }: Props) {
               <div className="grid grid-cols-2 gap-2 sm:gap-3 mb-3.5">
                 <div className="p-3 rounded-xl bg-neutral-50 border border-neutral-100">
                   <p className="text-[11px] text-neutral-400 font-semibold mb-0.5">Pickup</p>
-                  <p className="text-xs sm:text-sm font-bold truncate text-neutral-800">{activeRide.from}</p>
+                  <p className="text-xs sm:text-sm font-bold break-words text-neutral-800 leading-snug">{activeRide.from}</p>
                 </div>
                 <div className="p-3 rounded-xl bg-neutral-50 border border-neutral-100">
                   <p className="text-[11px] text-neutral-400 font-semibold mb-0.5">Drop-off</p>
-                  <p className="text-xs sm:text-sm font-bold truncate text-neutral-800">{activeRide.to}</p>
+                  <p className="text-xs sm:text-sm font-bold break-words text-neutral-800 leading-snug">{activeRide.to}</p>
                 </div>
               </div>
 
               <div className="flex items-center justify-between mb-4 p-3 rounded-xl bg-neutral-50 border border-neutral-100">
-                <div>
+                <div className="min-w-0 flex-1 pr-2">
                   <p className="text-[11px] text-neutral-400 font-semibold mb-0.5">Rider</p>
-                  <p className="text-xs sm:text-sm font-bold text-neutral-900">{activeRide.rider}</p>
+                  <p className="text-xs sm:text-sm font-bold text-neutral-900 break-words">{activeRide.rider}</p>
                   <p className="text-[11px] font-mono text-neutral-500 mt-0.5">{activeRide.phone}</p>
                 </div>
-                <p className="text-2xl font-black text-amber-600">₦{activeRide.fare}</p>
+                <p className="text-2xl font-black text-amber-600 flex-shrink-0">₦{activeRide.fare}</p>
               </div>
 
               {phase === 'arriving' ? (
@@ -739,7 +718,7 @@ export default function DriverDashboard({ setView }: Props) {
               ✓
             </div>
             <h3 className="text-lg font-black mb-1 text-neutral-900">Ride Completed!</h3>
-            <p className="text-xs sm:text-sm text-neutral-500 mb-2">{activeRide.from} → {activeRide.to}</p>
+            <p className="text-xs sm:text-sm text-neutral-500 mb-2 break-words">{activeRide.from} → {activeRide.to}</p>
             <p className="text-3xl font-black text-amber-600 mb-5">+₦{activeRide.fare}</p>
             <button
               onClick={resetRide}
@@ -805,8 +784,10 @@ export default function DriverDashboard({ setView }: Props) {
                     <div className="flex items-start justify-between mb-3 gap-3">
                       <div className="min-w-0 flex-1">
                         <span className="text-[10px] sm:text-xs font-mono text-neutral-400">ID: {ride.id.slice(0, 8)}</span>
-                        <p className="text-sm sm:text-base font-bold text-neutral-900 truncate mt-0.5">{ride.from} → {ride.to}</p>
-                        <p className="text-xs text-neutral-500 truncate mt-0.5">{ride.rider} {ride.dept ? `· ${ride.dept}` : ''}</p>
+                        <p className="text-sm sm:text-base font-bold text-neutral-900 break-words mt-0.5 leading-snug">
+                          {ride.from} <span className="text-neutral-400 font-normal">→</span> {ride.to}
+                        </p>
+                        <p className="text-xs text-neutral-500 break-words mt-0.5">{ride.rider} {ride.dept ? `· ${ride.dept}` : ''}</p>
                         {isNegotiable && (
                           <span className="inline-block mt-1 text-[10px] font-bold px-2 py-0.5 rounded bg-amber-100 text-amber-800">
                             Custom Location
@@ -896,8 +877,8 @@ export default function DriverDashboard({ setView }: Props) {
                         🛺
                       </div>
                       <div className="min-w-0 flex-1">
-                        <p className="text-xs sm:text-sm font-bold text-neutral-800 truncate">{r.from} → {r.to}</p>
-                        <p className="text-[11px] text-neutral-400 mt-0.5 truncate">{r.time} · {r.rider}</p>
+                        <p className="text-xs sm:text-sm font-bold text-neutral-800 break-words leading-snug">{r.from} → {r.to}</p>
+                        <p className="text-[11px] text-neutral-400 mt-0.5 break-words">{r.time} · {r.rider}</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
@@ -914,7 +895,6 @@ export default function DriverDashboard({ setView }: Props) {
         )}
       </div>
 
-      {/* Mandatory Cancellation Modal */}
       <CancelRideModal
         isOpen={showCancelModal}
         onClose={() => setShowCancelModal(false)}
