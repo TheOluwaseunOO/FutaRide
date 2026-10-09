@@ -6,23 +6,32 @@ export default function AdminLogin() {
   const navigate = useNavigate()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  
+  // Modes: 'login' | 'set-password'
   const [isInviteMode, setIsInviteMode] = useState(false)
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
+  
   const [loading, setLoading] = useState(false)
   const [errorMsg, setErrorMsg] = useState('')
   const [successMsg, setSuccessMsg] = useState('')
 
   useEffect(() => {
-    // 1. Check if the URL hash contains invite/recovery tokens
+    // 1. Detect tokens from URL hash or query params
     const hash = window.location.hash
-    if (hash && (hash.includes('type=invite') || hash.includes('type=recovery'))) {
+    const search = window.location.search
+    if (
+      hash.includes('type=invite') ||
+      hash.includes('type=recovery') ||
+      search.includes('type=invite') ||
+      search.includes('type=recovery')
+    ) {
       setIsInviteMode(true)
     }
 
-    // 2. Also listen for Supabase auth state change (PASSWORD_RECOVERY or USER_UPDATED)
+    // 2. Listen for auth state change
     const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'PASSWORD_RECOVERY' || (session && hash.includes('type=invite'))) {
+      if (event === 'PASSWORD_RECOVERY' || (session && (hash.includes('type=invite') || search.includes('type=invite')))) {
         setIsInviteMode(true)
       }
     })
@@ -39,14 +48,15 @@ export default function AdminLogin() {
     setErrorMsg('')
 
     try {
+      const cleanEmail = email.trim().toLowerCase()
       const { data, error } = await supabase.auth.signInWithPassword({
-        email: email.trim().toLowerCase(),
+        email: cleanEmail,
         password,
       })
 
       if (error) throw error
 
-      // Check if user is in admin_users
+      // Check admin status
       const { data: adminRow } = await supabase
         .from('admin_users')
         .select('*')
@@ -66,7 +76,7 @@ export default function AdminLogin() {
     }
   }
 
-  // Set Initial Password for Invited Admin
+  // Set Password Handler (Works both via active invite session or password reset)
   async function handleSetPassword(e: React.FormEvent) {
     e.preventDefault()
     if (newPassword.length < 6) {
@@ -82,24 +92,36 @@ export default function AdminLogin() {
     setErrorMsg('')
 
     try {
-      const { data, error } = await supabase.auth.updateUser({
-        password: newPassword,
-      })
+      const { data: userData } = await supabase.auth.getUser()
 
-      if (error) throw error
+      if (userData?.user) {
+        // User already in active invite session from clicking email link
+        const { error: updateErr } = await supabase.auth.updateUser({
+          password: newPassword,
+        })
+        if (updateErr) throw updateErr
 
-      // Mark invite_status as accepted in admin_users
-      if (data.user) {
         await supabase
           .from('admin_users')
-          .update({ invite_status: 'accepted', user_id: data.user.id })
-          .eq('email', data.user.email?.toLowerCase())
-      }
+          .update({ invite_status: 'accepted', user_id: userData.user.id })
+          .eq('email', userData.user.email?.toLowerCase())
 
-      setSuccessMsg('Password configured successfully! Redirecting...')
-      setTimeout(() => {
-        navigate('/admin')
-      }, 1500)
+        setSuccessMsg('Password created successfully! Entering console...')
+        setTimeout(() => navigate('/admin'), 1200)
+      } else {
+        // User entered email directly without clicking invite link
+        const cleanEmail = email.trim().toLowerCase()
+        if (!cleanEmail) {
+          throw new Error('Please provide your admin email.')
+        }
+
+        const { error: resetErr } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
+          redirectTo: `${window.location.origin}/admin/login#type=invite`,
+        })
+        if (resetErr) throw resetErr
+
+        setSuccessMsg(`Activation email sent to ${cleanEmail}. Please check your inbox and click the link!`)
+      }
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to update password.')
     } finally {
@@ -117,8 +139,8 @@ export default function AdminLogin() {
         <div className="bg-white rounded-3xl p-7 sm:p-8 border border-neutral-200 shadow-sm">
           {isInviteMode ? (
             <>
-              <h2 className="text-xl font-black text-neutral-900 mb-1">Welcome to FutaRide Admin</h2>
-              <p className="text-xs text-neutral-500 mb-6">Create a password to activate your admin account.</p>
+              <h2 className="text-xl font-black text-neutral-900 mb-1">Activate Admin Access</h2>
+              <p className="text-xs text-neutral-500 mb-6">Create a password to complete your administrator setup.</p>
 
               {errorMsg && (
                 <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-xs font-semibold text-red-600">
@@ -134,7 +156,7 @@ export default function AdminLogin() {
               <form onSubmit={handleSetPassword} className="space-y-4">
                 <div>
                   <label className="block text-[11px] font-bold uppercase tracking-wider text-neutral-500 mb-1.5">
-                    New Password
+                    Choose New Password
                   </label>
                   <input
                     type="password"
@@ -165,9 +187,18 @@ export default function AdminLogin() {
                   disabled={loading}
                   className="w-full py-3 rounded-xl font-bold text-xs sm:text-sm bg-[#E6900E] text-white hover:opacity-95 active:scale-[0.99] transition-all shadow-sm disabled:opacity-50 mt-2"
                 >
-                  {loading ? 'Activating Account...' : 'Set Password & Enter Console'}
+                  {loading ? 'Activating...' : 'Save Password & Enter Console'}
                 </button>
               </form>
+
+              <div className="text-center mt-4">
+                <button
+                  onClick={() => setIsInviteMode(false)}
+                  className="text-xs text-neutral-500 hover:text-neutral-900 transition-colors"
+                >
+                  Already have a password? <span className="font-bold text-neutral-900">Sign in</span>
+                </button>
+              </div>
             </>
           ) : (
             <>
@@ -177,6 +208,11 @@ export default function AdminLogin() {
               {errorMsg && (
                 <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-xs font-semibold text-red-600">
                   {errorMsg}
+                </div>
+              )}
+              {successMsg && (
+                <div className="mb-4 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs font-semibold text-emerald-700">
+                  {successMsg}
                 </div>
               )}
 
@@ -217,6 +253,19 @@ export default function AdminLogin() {
                   {loading ? 'Verifying...' : 'Access Console'}
                 </button>
               </form>
+
+              <div className="mt-4 pt-3 border-t border-neutral-100 text-center">
+                <button
+                  onClick={() => {
+                    setErrorMsg('')
+                    setSuccessMsg('')
+                    setIsInviteMode(true)
+                  }}
+                  className="text-xs text-[#E6900E] hover:underline font-semibold"
+                >
+                  Invited as an admin? Set your password
+                </button>
+              </div>
             </>
           )}
         </div>
