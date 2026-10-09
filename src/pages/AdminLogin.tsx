@@ -1,146 +1,234 @@
-import { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { type View } from '../App'
 import { supabase } from '../lib/supabase'
 
-interface Props {
-  onAuth: () => void
-  setView?: (v: View) => void
-}
-
-export default function AdminLogin({ onAuth, setView }: Props) {
+export default function AdminLogin() {
   const navigate = useNavigate()
-  const [email, setEmail]       = useState('')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [error, setError]       = useState(false)
-  const [loading, setLoading]   = useState(false)
+  const [isInviteMode, setIsInviteMode] = useState(false)
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [loading, setLoading] = useState(false)
   const [errorMsg, setErrorMsg] = useState('')
+  const [successMsg, setSuccessMsg] = useState('')
 
-  async function handleSubmit(e: React.FormEvent) {
+  useEffect(() => {
+    // 1. Check if the URL hash contains invite/recovery tokens
+    const hash = window.location.hash
+    if (hash && (hash.includes('type=invite') || hash.includes('type=recovery'))) {
+      setIsInviteMode(true)
+    }
+
+    // 2. Also listen for Supabase auth state change (PASSWORD_RECOVERY or USER_UPDATED)
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'PASSWORD_RECOVERY' || (session && hash.includes('type=invite'))) {
+        setIsInviteMode(true)
+      }
+    })
+
+    return () => {
+      authListener.subscription.unsubscribe()
+    }
+  }, [])
+
+  // Standard Login Handler
+  async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
     setLoading(true)
-    setError(false)
     setErrorMsg('')
 
     try {
-      // 1. Authenticate with Supabase Auth
-      const { data: authData, error: authErr } = await supabase.auth.signInWithPassword({
+      const { data, error } = await supabase.auth.signInWithPassword({
         email: email.trim().toLowerCase(),
         password,
       })
 
-      if (authErr || !authData.user) {
-        throw new Error('Invalid email or password.')
-      }
+      if (error) throw error
 
-      // 2. Check if the authenticated user has the 'admin' role
-      const { data: profileData } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', authData.user.id)
+      // Check if user is in admin_users
+      const { data: adminRow } = await supabase
+        .from('admin_users')
+        .select('*')
+        .eq('user_id', data.user.id)
         .maybeSingle()
 
-      const userRole = (profileData?.role || authData.user.user_metadata?.role || '').toLowerCase()
-
-      if (userRole !== 'admin') {
+      if (!adminRow) {
         await supabase.auth.signOut()
         throw new Error('Access denied. This account does not have admin permissions.')
       }
 
-      onAuth()
       navigate('/admin')
     } catch (err: any) {
-      setError(true)
-      setErrorMsg(err.message || 'Invalid credentials. Access denied.')
-      setPassword('')
+      setErrorMsg(err.message || 'Invalid email or password.')
     } finally {
       setLoading(false)
     }
   }
 
-  function handleGoHome() {
-    if (setView) setView('landing')
-    navigate('/')
+  // Set Initial Password for Invited Admin
+  async function handleSetPassword(e: React.FormEvent) {
+    e.preventDefault()
+    if (newPassword.length < 6) {
+      setErrorMsg('Password must be at least 6 characters.')
+      return
+    }
+    if (newPassword !== confirmPassword) {
+      setErrorMsg('Passwords do not match.')
+      return
+    }
+
+    setLoading(true)
+    setErrorMsg('')
+
+    try {
+      const { data, error } = await supabase.auth.updateUser({
+        password: newPassword,
+      })
+
+      if (error) throw error
+
+      // Mark invite_status as accepted in admin_users
+      if (data.user) {
+        await supabase
+          .from('admin_users')
+          .update({ invite_status: 'accepted', user_id: data.user.id })
+          .eq('email', data.user.email?.toLowerCase())
+      }
+
+      setSuccessMsg('Password configured successfully! Redirecting...')
+      setTimeout(() => {
+        navigate('/admin')
+      }, 1500)
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Failed to update password.')
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center px-4"
-      style={{ background: '#f7f7f7' }}>
+    <div className="min-h-screen flex flex-col items-center justify-center bg-[#f7f7f7] px-4 font-sans">
       <div className="w-full max-w-sm">
-
-        <button onClick={handleGoHome} className="block mb-10 text-center w-full">
+        <div className="flex justify-center mb-8">
           <img src="/logo.png" alt="FutaRide" className="h-8 w-auto" />
-        </button>
-
-        <div className="bg-white rounded-2xl p-8" style={{ border: '1px solid #e8e8e8' }}>
-          <div className="mb-7">
-            <h1 className="text-xl font-black mb-1" style={{ fontFamily: 'Outfit, sans-serif', color: '#1a1a1a' }}>
-              Admin Console
-            </h1>
-            <p className="text-sm" style={{ color: '#737373' }}>
-              Restricted access. Authorised personnel only.
-            </p>
-          </div>
-
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wide mb-1.5"
-                style={{ color: '#737373' }}>
-                Email
-              </label>
-              <input
-                type="email"
-                value={email}
-                onChange={e => { setEmail(e.target.value); setError(false) }}
-                placeholder="Admin email address"
-                autoFocus
-                className="w-full px-4 py-3 rounded-xl text-sm focus:outline-none"
-                style={{
-                  background: '#f7f7f7',
-                  border: `1px solid ${error ? '#fca5a5' : '#e8e8e8'}`,
-                  color: '#1a1a1a',
-                }}
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wide mb-1.5"
-                style={{ color: '#737373' }}>
-                Password
-              </label>
-              <input
-                type="password"
-                value={password}
-                onChange={e => { setPassword(e.target.value); setError(false) }}
-                placeholder="••••••••"
-                className="w-full px-4 py-3 rounded-xl text-sm focus:outline-none"
-                style={{
-                  background: '#f7f7f7',
-                  border: `1px solid ${error ? '#fca5a5' : '#e8e8e8'}`,
-                  color: '#1a1a1a',
-                }}
-              />
-              {error && (
-                <p className="text-xs mt-1.5" style={{ color: '#dc2626' }}>
-                  {errorMsg || 'Invalid credentials. Access denied.'}
-                </p>
-              )}
-            </div>
-            <button
-              type="submit"
-              disabled={!email || !password || loading}
-              className="w-full py-3.5 rounded-xl font-bold text-sm transition-all disabled:opacity-40 hover:opacity-90"
-              style={{ background: '#1a1a1a', color: '#fff' }}>
-              {loading ? 'Verifying…' : 'Access Console'}
-            </button>
-          </form>
         </div>
 
-        <p className="text-center text-xs mt-6" style={{ color: '#a3a3a3' }}>
-          Not an admin?{' '}
-          <button onClick={handleGoHome} className="font-semibold" style={{ color: '#E6900E' }}>
-            Go back
+        <div className="bg-white rounded-3xl p-7 sm:p-8 border border-neutral-200 shadow-sm">
+          {isInviteMode ? (
+            <>
+              <h2 className="text-xl font-black text-neutral-900 mb-1">Welcome to FutaRide Admin</h2>
+              <p className="text-xs text-neutral-500 mb-6">Create a password to activate your admin account.</p>
+
+              {errorMsg && (
+                <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-xs font-semibold text-red-600">
+                  {errorMsg}
+                </div>
+              )}
+              {successMsg && (
+                <div className="mb-4 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs font-semibold text-emerald-700">
+                  {successMsg}
+                </div>
+              )}
+
+              <form onSubmit={handleSetPassword} className="space-y-4">
+                <div>
+                  <label className="block text-[11px] font-bold uppercase tracking-wider text-neutral-500 mb-1.5">
+                    New Password
+                  </label>
+                  <input
+                    type="password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="At least 6 characters"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-50 border border-neutral-200 text-xs sm:text-sm focus:outline-none focus:border-amber-500 transition-colors"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold uppercase tracking-wider text-neutral-500 mb-1.5">
+                    Confirm Password
+                  </label>
+                  <input
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="Repeat password"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-50 border border-neutral-200 text-xs sm:text-sm focus:outline-none focus:border-amber-500 transition-colors"
+                    required
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="w-full py-3 rounded-xl font-bold text-xs sm:text-sm bg-[#E6900E] text-white hover:opacity-95 active:scale-[0.99] transition-all shadow-sm disabled:opacity-50 mt-2"
+                >
+                  {loading ? 'Activating Account...' : 'Set Password & Enter Console'}
+                </button>
+              </form>
+            </>
+          ) : (
+            <>
+              <h2 className="text-xl font-black text-neutral-900 mb-1">Admin Console</h2>
+              <p className="text-xs text-neutral-500 mb-6">Restricted access. Authorised personnel only.</p>
+
+              {errorMsg && (
+                <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-xs font-semibold text-red-600">
+                  {errorMsg}
+                </div>
+              )}
+
+              <form onSubmit={handleLogin} className="space-y-4">
+                <div>
+                  <label className="block text-[11px] font-bold uppercase tracking-wider text-neutral-500 mb-1.5">
+                    Email
+                  </label>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="admin@futa.edu.ng"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-50 border border-neutral-200 text-xs sm:text-sm focus:outline-none focus:border-amber-500 transition-colors"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold uppercase tracking-wider text-neutral-500 mb-1.5">
+                    Password
+                  </label>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-50 border border-neutral-200 text-xs sm:text-sm focus:outline-none focus:border-amber-500 transition-colors"
+                    required
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="w-full py-3 rounded-xl font-bold text-xs sm:text-sm bg-neutral-900 text-white hover:bg-neutral-800 active:scale-[0.99] transition-all shadow-sm disabled:opacity-50 mt-2"
+                >
+                  {loading ? 'Verifying...' : 'Access Console'}
+                </button>
+              </form>
+            </>
+          )}
+        </div>
+
+        <div className="text-center mt-5">
+          <button
+            onClick={() => navigate('/')}
+            className="text-xs text-neutral-500 hover:text-neutral-900 transition-colors"
+          >
+            Not an admin? <span className="font-bold text-[#E6900E]">Go back</span>
           </button>
-        </p>
+        </div>
       </div>
     </div>
   )
