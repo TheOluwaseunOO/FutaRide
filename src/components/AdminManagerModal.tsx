@@ -65,6 +65,7 @@ export default function AdminManagerModal({ isOpen, onClose }: Props) {
     setStatusMsg('')
 
     try {
+      // 1. Save admin rights in Postgres
       const { data, error } = await supabase.rpc('upsert_admin_with_rights', {
         p_email: email,
         p_can_verify_drivers: rights.can_verify_drivers,
@@ -78,11 +79,24 @@ export default function AdminManagerModal({ isOpen, onClose }: Props) {
 
       if (error || !data?.success) {
         setStatusMsg(data?.message || error?.message || 'Failed to save admin.')
-      } else {
-        setStatusMsg(`Admin rights saved for ${email}!`)
-        setEmailInput('')
-        loadAdmins()
+        return
       }
+
+      // 2. Trigger the invite email via the Edge Function
+      try {
+        const { error: fnErr } = await supabase.functions.invoke('invite-admin', {
+          body: { email },
+        })
+        if (fnErr) {
+          console.warn('Invite email notification notice:', fnErr)
+        }
+      } catch (e) {
+        console.warn('Invite function error:', e)
+      }
+
+      setStatusMsg(`Invitation email sent & rights configured for ${email}!`)
+      setEmailInput('')
+      loadAdmins()
     } catch (err: any) {
       setStatusMsg(err.message || 'Error assigning admin.')
     } finally {
