@@ -28,16 +28,47 @@ interface DriverRecord {
   created_at?: string
 }
 
+interface UserProfile {
+  id: string
+  full_name: string
+  role: string
+  phone_number?: string
+  department?: string
+  created_at?: string
+}
+
+interface PlatformRide {
+  id: string
+  fare: number
+  status: string
+  custom_pickup?: string | null
+  custom_dropoff?: string | null
+  created_at: string
+  student_name?: string
+  driver_name?: string
+}
+
 export default function AdminDashboard() {
   const navigate = useNavigate()
   const { user, profile, signOut } = useAuth()
 
-  const [activeTab, setActiveTab] = useState<'locations' | 'fares' | 'drivers'>('locations')
+  // Dynamic admin display name resolution (eliminates "Unnamed User")
+  const adminDisplayName =
+    profile?.full_name ||
+    user?.user_metadata?.full_name ||
+    (user?.email ? user.email.split('@')[0] : 'Administrator')
+
+  const [activeTab, setActiveTab] = useState<'locations' | 'fares' | 'drivers' | 'users' | 'rides'>('locations')
   const [locations, setLocations] = useState<LocationHub[]>([])
   const [routes, setRoutes] = useState<RouteFare[]>([])
   const [drivers, setDrivers] = useState<DriverRecord[]>([])
+  const [usersList, setUsersList] = useState<UserProfile[]>([])
+  const [ridesList, setRidesList] = useState<PlatformRide[]>([])
+
   const [loading, setLoading] = useState(true)
   const [loadingDrivers, setLoadingDrivers] = useState(false)
+  const [loadingUsers, setLoadingUsers] = useState(false)
+  const [loadingRides, setLoadingRides] = useState(false)
   const [errorMsg, setErrorMsg] = useState('')
   const [successMsg, setSuccessMsg] = useState('')
 
@@ -45,21 +76,17 @@ export default function AdminDashboard() {
   const [isSuperAdmin, setIsSuperAdmin] = useState(false)
   const [showAdminModal, setShowAdminModal] = useState(false)
 
-  // New location form state
+  // Location form state
   const [newLocationName, setNewLocationName] = useState('')
   const [isAddingLocation, setIsAddingLocation] = useState(false)
-
-  // Edit location state
   const [editingLocId, setEditingLocId] = useState<string | null>(null)
   const [editingLocName, setEditingLocName] = useState('')
 
-  // New route fare state
+  // Route fare form state
   const [newPickupId, setNewPickupId] = useState('')
   const [newDropoffId, setNewDropoffId] = useState('')
   const [newFareAmount, setNewFareAmount] = useState('')
   const [isAddingRoute, setIsAddingRoute] = useState(false)
-
-  // Edit route fare state
   const [editingRouteId, setEditingRouteId] = useState<string | null>(null)
   const [editingFareInput, setEditingFareInput] = useState('')
 
@@ -81,7 +108,7 @@ export default function AdminDashboard() {
           setIsSuperAdmin(true)
         }
       } catch (err) {
-        console.warn('Super Admin check warning:', err)
+        console.warn('Super Admin verification check:', err)
       }
     }
     verifySuperAdminRole()
@@ -139,6 +166,55 @@ export default function AdminDashboard() {
       console.error('Error fetching drivers:', err)
     } finally {
       setLoadingDrivers(false)
+    }
+  }
+
+  async function fetchUsers() {
+    setLoadingUsers(true)
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(100)
+
+      if (error) throw error
+      setUsersList((data as UserProfile[]) || [])
+    } catch (err: any) {
+      console.error('Error fetching users:', err)
+    } finally {
+      setLoadingUsers(false)
+    }
+  }
+
+  async function fetchRides() {
+    setLoadingRides(true)
+    try {
+      const [{ data: ridesData, error: ridesErr }, { data: profilesData }] = await Promise.all([
+        supabase.from('rides').select('*').order('created_at', { ascending: false }).limit(100),
+        supabase.from('profiles').select('id, full_name'),
+      ])
+
+      if (ridesErr) throw ridesErr
+
+      const nameMap = new Map((profilesData || []).map(p => [p.id, p.full_name]))
+
+      const enriched: PlatformRide[] = (ridesData || []).map((r: any) => ({
+        id: r.id,
+        fare: Number(r.fare) || 0,
+        status: r.status,
+        custom_pickup: r.custom_pickup,
+        custom_dropoff: r.custom_dropoff,
+        created_at: r.created_at,
+        student_name: nameMap.get(r.student_id) || 'Student Rider',
+        driver_name: r.driver_id ? nameMap.get(r.driver_id) || 'Driver' : undefined,
+      }))
+
+      setRidesList(enriched)
+    } catch (err: any) {
+      console.error('Error fetching rides:', err)
+    } finally {
+      setLoadingRides(false)
     }
   }
 
@@ -269,9 +345,7 @@ export default function AdminDashboard() {
       if (existing) {
         const { error: updateErr } = await supabase
           .from('routes')
-          .update({
-            base_fare: fareVal,
-          })
+          .update({ base_fare: fareVal })
           .eq('id', existing.id)
 
         if (updateErr) throw updateErr
@@ -310,9 +384,7 @@ export default function AdminDashboard() {
     try {
       const { error } = await supabase
         .from('routes')
-        .update({
-          base_fare: fareVal,
-        })
+        .update({ base_fare: fareVal })
         .eq('id', routeId)
 
       if (error) throw error
@@ -363,15 +435,15 @@ export default function AdminDashboard() {
       <header className="sticky top-0 z-40 bg-white border-b border-neutral-200 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <img src="/logo.png" alt="FutaRide" className="h-7 w-auto" />
-          <span className="text-xs font-mono font-bold bg-neutral-900 text-white px-2 py-0.5 rounded">
-            Admin Portal
+          <span className="text-xs font-mono font-bold bg-neutral-900 text-white px-2.5 py-1 rounded">
+            {isSuperAdmin ? 'Super Admin Portal' : 'Admin Portal'}
           </span>
         </div>
         <div className="flex items-center gap-3 sm:gap-4">
           {isSuperAdmin && (
             <button
               onClick={() => setShowAdminModal(true)}
-              className="text-xs font-bold px-3 py-1.5 rounded-xl bg-amber-500 text-white hover:bg-amber-600 transition-colors shadow-sm flex items-center gap-1.5 active:scale-95"
+              className="text-xs font-bold px-3.5 py-1.5 rounded-xl bg-amber-500 text-white hover:bg-amber-600 transition-colors shadow-sm flex items-center gap-1.5 active:scale-95"
             >
               <span>⚙️</span>
               <span>Team & Rights</span>
@@ -379,12 +451,12 @@ export default function AdminDashboard() {
           )}
 
           <span className="text-xs text-neutral-500 hidden sm:inline">
-            Logged in as <strong className="text-neutral-900">{profile?.full_name || user?.email}</strong>
+            Logged in as <strong className="text-neutral-900">{adminDisplayName}</strong>
           </span>
           <button
             onClick={async () => {
               await signOut()
-              navigate('/auth')
+              navigate('/admin-login')
             }}
             className="text-xs font-bold text-neutral-600 hover:text-red-600 border border-neutral-200 hover:border-red-200 px-3 py-1.5 rounded-lg transition-colors"
           >
@@ -397,15 +469,21 @@ export default function AdminDashboard() {
       <main className="flex-1 max-w-5xl w-full mx-auto p-6 md:p-8">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
           <div>
-            <h1 className="text-2xl font-black text-neutral-900 tracking-tight">Admin Console</h1>
-            <p className="text-xs text-neutral-500 mt-0.5">Manage official campus hubs, standard route pricing, and driver verification</p>
+            <h1 className="text-2xl font-black text-neutral-900 tracking-tight">
+              {isSuperAdmin ? 'Super Admin Console' : 'Admin Console'}
+            </h1>
+            <p className="text-xs text-neutral-500 mt-0.5">
+              {isSuperAdmin
+                ? 'Full system oversight: manage hubs, pricing, drivers, users, and campus ride history'
+                : 'Manage official campus hubs, standard route pricing, and driver verification'}
+            </p>
           </div>
 
           {/* Module Navigation Tabs */}
-          <div className="flex p-1 bg-neutral-200/70 rounded-xl">
+          <div className="flex flex-wrap p-1 bg-neutral-200/70 rounded-xl gap-0.5">
             <button
               onClick={() => setActiveTab('locations')}
-              className={`py-1.5 px-3.5 text-xs font-bold rounded-lg transition-all ${
+              className={`py-1.5 px-3 text-xs font-bold rounded-lg transition-all ${
                 activeTab === 'locations' ? 'bg-white text-neutral-900 shadow-sm' : 'text-neutral-600 hover:text-neutral-900'
               }`}
             >
@@ -413,7 +491,7 @@ export default function AdminDashboard() {
             </button>
             <button
               onClick={() => setActiveTab('fares')}
-              className={`py-1.5 px-3.5 text-xs font-bold rounded-lg transition-all ${
+              className={`py-1.5 px-3 text-xs font-bold rounded-lg transition-all ${
                 activeTab === 'fares' ? 'bg-white text-neutral-900 shadow-sm' : 'text-neutral-600 hover:text-neutral-900'
               }`}
             >
@@ -424,11 +502,33 @@ export default function AdminDashboard() {
                 setActiveTab('drivers')
                 fetchDrivers()
               }}
-              className={`py-1.5 px-3.5 text-xs font-bold rounded-lg transition-all ${
+              className={`py-1.5 px-3 text-xs font-bold rounded-lg transition-all ${
                 activeTab === 'drivers' ? 'bg-white text-neutral-900 shadow-sm' : 'text-neutral-600 hover:text-neutral-900'
               }`}
             >
               Drivers ({drivers.length})
+            </button>
+            <button
+              onClick={() => {
+                setActiveTab('users')
+                fetchUsers()
+              }}
+              className={`py-1.5 px-3 text-xs font-bold rounded-lg transition-all ${
+                activeTab === 'users' ? 'bg-white text-neutral-900 shadow-sm' : 'text-neutral-600 hover:text-neutral-900'
+              }`}
+            >
+              Users
+            </button>
+            <button
+              onClick={() => {
+                setActiveTab('rides')
+                fetchRides()
+              }}
+              className={`py-1.5 px-3 text-xs font-bold rounded-lg transition-all ${
+                activeTab === 'rides' ? 'bg-white text-neutral-900 shadow-sm' : 'text-neutral-600 hover:text-neutral-900'
+              }`}
+            >
+              Ride History
             </button>
           </div>
         </div>
@@ -735,6 +835,114 @@ export default function AdminDashboard() {
                           Suspend
                         </button>
                       )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 4: USERS DIRECTORY */}
+        {activeTab === 'users' && (
+          <div className="bg-white rounded-2xl border border-neutral-200 shadow-sm overflow-hidden">
+            <div className="px-5 py-4 border-b border-neutral-100 flex items-center justify-between">
+              <div>
+                <h2 className="text-sm font-bold text-neutral-900">Platform Users Directory</h2>
+                <p className="text-xs text-neutral-500">Registered campus riders, students, and drivers</p>
+              </div>
+              <span className="text-xs text-neutral-400 font-mono">{usersList.length} users</span>
+            </div>
+
+            {loadingUsers ? (
+              <div className="p-8 text-center text-xs text-neutral-400">Loading user profiles...</div>
+            ) : usersList.length === 0 ? (
+              <div className="p-8 text-center text-xs text-neutral-400">No registered users located.</div>
+            ) : (
+              <div className="divide-y divide-neutral-100">
+                {usersList.map(u => (
+                  <div
+                    key={u.id}
+                    className="px-5 py-3.5 flex items-center justify-between hover:bg-neutral-50/60 transition-colors"
+                  >
+                    <div>
+                      <p className="text-xs sm:text-sm font-bold text-neutral-900">{u.full_name || 'Campus Member'}</p>
+                      <p className="text-[11px] text-neutral-500 mt-0.5">
+                        {u.phone_number || 'No phone'} {u.department ? `· ${u.department}` : ''}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <span className={`inline-block text-[10px] uppercase font-bold px-2 py-0.5 rounded-full ${
+                        u.role === 'admin'
+                          ? 'bg-amber-100 text-amber-800'
+                          : u.role === 'driver'
+                          ? 'bg-blue-100 text-blue-800'
+                          : 'bg-neutral-100 text-neutral-700'
+                      }`}>
+                        {u.role || 'rider'}
+                      </span>
+                      {u.created_at && (
+                        <p className="text-[10px] text-neutral-400 mt-1">
+                          Joined {new Date(u.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 5: RIDE HISTORY AUDITS */}
+        {activeTab === 'rides' && (
+          <div className="bg-white rounded-2xl border border-neutral-200 shadow-sm overflow-hidden">
+            <div className="px-5 py-4 border-b border-neutral-100 flex items-center justify-between">
+              <div>
+                <h2 className="text-sm font-bold text-neutral-900">Campus Ride History & Audits</h2>
+                <p className="text-xs text-neutral-500">Live and historical platform dispatch logs</p>
+              </div>
+              <span className="text-xs text-neutral-400 font-mono">{ridesList.length} rides</span>
+            </div>
+
+            {loadingRides ? (
+              <div className="p-8 text-center text-xs text-neutral-400">Loading ride logs...</div>
+            ) : ridesList.length === 0 ? (
+              <div className="p-8 text-center text-xs text-neutral-400">No rides recorded on the platform yet.</div>
+            ) : (
+              <div className="divide-y divide-neutral-100">
+                {ridesList.map(r => (
+                  <div
+                    key={r.id}
+                    className="px-5 py-3.5 flex items-center justify-between hover:bg-neutral-50/60 transition-colors"
+                  >
+                    <div className="min-w-0 flex-1 pr-3">
+                      <p className="text-xs sm:text-sm font-bold text-neutral-900 truncate">
+                        {r.custom_pickup || 'Campus Hub'} → {r.custom_dropoff || 'Campus Destination'}
+                      </p>
+                      <p className="text-[11px] text-neutral-500 mt-0.5">
+                        Rider: <strong className="text-neutral-700">{r.student_name}</strong> {r.driver_name && <>· Driver: <strong className="text-neutral-700">{r.driver_name}</strong></>}
+                      </p>
+                    </div>
+
+                    <div className="text-right flex-shrink-0">
+                      <p className="text-xs sm:text-sm font-black text-amber-600">₦{r.fare}</p>
+                      <div className="flex items-center gap-1.5 justify-end mt-0.5">
+                        <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${
+                          r.status === 'completed'
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : r.status === 'cancelled'
+                            ? 'bg-red-100 text-red-700'
+                            : r.status === 'in_progress' || r.status === 'accepted'
+                            ? 'bg-amber-100 text-amber-800'
+                            : 'bg-neutral-100 text-neutral-600'
+                        }`}>
+                          {r.status}
+                        </span>
+                        <span className="text-[10px] text-neutral-400">
+                          {new Date(r.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </div>
                     </div>
                   </div>
                 ))}
